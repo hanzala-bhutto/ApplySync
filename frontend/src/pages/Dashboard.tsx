@@ -1,5 +1,5 @@
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import {
   DndContext,
   useDraggable,
@@ -35,6 +35,11 @@ export function Dashboard() {
   const { data, isLoading, isError } = useQuery({
     queryKey,
     queryFn: () => getDashboard(filters),
+    // Every filter change is a new queryKey. Without this, React Query
+    // unmounts everything back to the isLoading state on each change instead
+    // of keeping the current board visible while the new one loads - which
+    // reads as "the whole page refreshing" even though it's just a refetch.
+    placeholderData: keepPreviousData,
   })
 
   const statusMutation = useMutation({
