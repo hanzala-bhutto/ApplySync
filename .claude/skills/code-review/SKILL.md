@@ -1,9 +1,9 @@
 ---
 name: code-review
-description: Project-specific review checklist for the job tracker (idempotency correctness, Gmail credential/PII handling, schema/migration safety, prompt-schema drift). Complements the global /code-review, use this for job-tracker-specific risk areas, use global /code-review for general correctness/simplification review.
+description: Project-specific review checklist for ApplySync (idempotency correctness, Gmail credential/PII handling, schema/migration safety, prompt-schema drift). Complements the global /code-review, use this for ApplySync-specific risk areas, use global /code-review for general correctness/simplification review.
 ---
 
-# Job tracker code review checklist
+# ApplySync code review checklist
 
 Run this alongside (not instead of) the global `/code-review` for changes
 touching this project. Focus on the risk areas specific to an email-parsing,

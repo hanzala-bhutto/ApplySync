@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from job_tracker.config import SourcesConfig
+from applysync.config import SourcesConfig
 
 
 def build_search_query(sources: SourcesConfig, after: date | None = None) -> str:

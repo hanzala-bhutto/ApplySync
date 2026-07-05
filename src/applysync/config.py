@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     llm_model: str = "anthropic:claude-sonnet-5"
     gmail_client_secrets_path: Path = Path(".secrets/credentials.json")
     gmail_token_path: Path = Path(".secrets/token.json")
-    db_path: Path = Path("job_tracker.db")
+    db_path: Path = Path("applysync.db")
     sync_interval_minutes: int = 20
 
 

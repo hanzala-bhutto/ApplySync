@@ -1,7 +1,7 @@
 from datetime import date
 
-from job_tracker.config import get_sources
-from job_tracker.gmail.query_builder import build_search_query, guess_platform
+from applysync.config import get_sources
+from applysync.gmail.query_builder import build_search_query, guess_platform
 
 
 def test_build_search_query_includes_all_platform_domains():

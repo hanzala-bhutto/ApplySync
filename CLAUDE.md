@@ -1,4 +1,4 @@
-# Job Application Tracker
+# ApplySync
 
 ## What this is
 
@@ -100,14 +100,14 @@ Follow-up reminders are a dashboard SQL query, not a graph node.
 ## Repo layout
 
 ```
-src/job_tracker/
+src/applysync/
   config.py
   gmail/client.py, gmail/query_builder.py
   pipeline/state.py, pipeline/nodes.py, pipeline/graph.py
   db/models.py, db/repository.py, db/init_db.py
   web/app.py, web/templates/, web/static/
   scheduler/run_scheduler.py
-  cli.py                    # `job-tracker sync`, `job-tracker serve`
+  cli.py                    # `applysync sync`, `applysync serve`
 config/sources.yaml
 eval/samples/, eval/run_eval.py   # phase 2
 tests/

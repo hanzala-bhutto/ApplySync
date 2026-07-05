@@ -1,6 +1,6 @@
 ---
 name: test
-description: Run or write tests for the job tracker project following its specific conventions (mocking LLM calls, throwaway SQLite fixtures, idempotency double-run checks, eval runner). Use when the user asks to test, verify, or add test coverage for this project.
+description: Run or write tests for the ApplySync project following its specific conventions (mocking LLM calls, throwaway SQLite fixtures, idempotency double-run checks, eval runner). Use when the user asks to test, verify, or add test coverage for this project.
 ---
 
 # Project test conventions

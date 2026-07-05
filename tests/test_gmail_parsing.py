@@ -1,6 +1,6 @@
 import base64
 
-from job_tracker.gmail.client import parse_message
+from applysync.gmail.client import parse_message
 
 
 def _b64(text: str) -> str:
