@@ -196,6 +196,49 @@ def test_application_timeline_orders_events_by_date(session):
     assert [e.source_email_id for e in timeline] == ["msg-1", "msg-2"]
 
 
+def test_set_manual_status_updates_status_and_adds_source_email_id_none_event(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    updated = repo.set_manual_status(session, application.id, "rejected")
+
+    assert updated.current_status == "rejected"
+    timeline = repo.application_timeline(session, application.id)
+    assert timeline[-1].source_email_id is None
+    assert timeline[-1].status == "rejected"
+
+
+def test_set_manual_status_returns_none_for_unknown_id(session):
+    assert repo.set_manual_status(session, 999, "rejected") is None
+
+
+def test_update_application_fields_only_overwrites_given_fields(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    updated = repo.update_application_fields(session, application.id, company_name="Acme Corp")
+
+    assert updated.company_name == "Acme Corp"
+    assert updated.job_title == "Engineer"
+    assert updated.platform == "linkedin"
+
+
+def test_update_application_fields_returns_none_for_unknown_id(session):
+    assert repo.update_application_fields(session, 999, company_name="X") is None
+
+
 def test_pipeline_run_lifecycle(session):
     repo.create_pipeline_run(session, "run-1")
     finished = repo.finish_pipeline_run(

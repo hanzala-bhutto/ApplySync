@@ -203,11 +203,26 @@ scripts/gmail_probe.py
       limiting, see LLM section above). Idempotency (double-run = 0 new
       rows) and status-update-links-not-duplicates both verified by
       automated tests in `tests/test_graph.py`.
-- [ ] M3: Web dashboard (status board, timeline, by-platform, reminders).
-      Include a "Connect Gmail" button using a web OAuth redirect flow
-      (not the installed-app local-server flow from the M1 CLI spike), so
-      first-run and any future re-consent happen inside the dashboard,
-      not the terminal.
+- [x] M3a: FastAPI dashboard core (status board, timeline, by-platform,
+      reminders), server-rendered, verified against real data.
+- [x] M3b: Interactive redesign. Tailwind CDN (chosen over Pico.css:
+      a custom Kanban layout needs utility-class control a classless
+      framework doesn't give you; CDN build is a known non-production
+      tradeoff, fine for a personal local tool), SortableJS drag-and-drop
+      between status columns (`PATCH /applications/{id}/status`), HTMX
+      inline field editing (`PATCH /applications/{id}`), and a "reprocess
+      from email" action (`POST /applications/{id}/reprocess`, refetches
+      the original Gmail message by its stored id and re-runs extraction
+      only, not the full graph). Found and fixed a real schema-migration
+      gap along the way: making `StatusEvent.source_email_id` nullable
+      doesn't apply to an already-existing local `applysync.db` file
+      (`create_all` only creates missing tables, never alters existing
+      ones) - there is no migration tooling yet, so a schema change means
+      deleting and recreating your local db for now.
+- [ ] M3c: "Connect Gmail" button using a web OAuth redirect flow (not the
+      installed-app local-server flow from the M1 CLI spike), so first-run
+      and any future re-consent happen inside the dashboard, not the
+      terminal.
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 

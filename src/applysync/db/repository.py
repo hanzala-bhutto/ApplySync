@@ -106,7 +106,7 @@ def add_status_event(
     application_id: int,
     status: str,
     event_date: datetime,
-    source_email_id: str,
+    source_email_id: str | None = None,
     raw_extract_json: str | None = None,
     notes: str | None = None,
 ) -> StatusEvent:
@@ -129,6 +129,52 @@ def add_status_event(
     session.commit()
     session.refresh(event)
     return event
+
+
+def get_application(session: Session, application_id: int) -> Application | None:
+    return session.get(Application, application_id)
+
+
+def set_manual_status(session: Session, application_id: int, status: str) -> Application | None:
+    """Drag-and-drop correction from the dashboard: writes a real status
+    event (source_email_id=None, since it didn't come from an email) rather
+    than silently overwriting current_status, so the timeline still shows
+    that a correction happened and when.
+    """
+    application = session.get(Application, application_id)
+    if application is None:
+        return None
+    add_status_event(session, application_id=application_id, status=status, event_date=_utcnow(), notes="Manually corrected from the dashboard")
+    session.refresh(application)
+    return application
+
+
+def update_application_fields(
+    session: Session,
+    application_id: int,
+    *,
+    company_name: str | None = None,
+    job_title: str | None = None,
+    platform: str | None = None,
+) -> Application | None:
+    """Inline-edit correction for extracted fields the LLM got wrong. Only
+    overwrites fields actually passed in, so a partial edit (e.g. just
+    platform) doesn't blank out the others.
+    """
+    application = session.get(Application, application_id)
+    if application is None:
+        return None
+    if company_name is not None:
+        application.company_name = company_name
+    if job_title is not None:
+        application.job_title = job_title
+    if platform is not None:
+        application.platform = platform
+    application.updated_at = _utcnow()
+    session.add(application)
+    session.commit()
+    session.refresh(application)
+    return application
 
 
 STATUS_ORDER = ["applied", "viewed", "interview", "offer", "rejected", "other"]

@@ -2,33 +2,8 @@
 {% block title %}{{ application.company_name }} - ApplySync{% endblock %}
 {% block content %}
 
-<p><a href="/">&larr; back to dashboard</a></p>
+<p class="mb-4"><a href="/" class="text-sm text-brand-600 hover:underline dark:text-brand-500">&larr; back to dashboard</a></p>
 
-<section>
-  <h2>{{ application.company_name }}</h2>
-  <p>
-    <strong>{{ application.job_title }}</strong><br>
-    Platform: {{ application.platform }}<br>
-    Applied: {{ application.applied_date }}<br>
-    Current status: <strong style="text-transform: capitalize;">{{ application.current_status }}</strong><br>
-    {% if application.location %}Location: {{ application.location }}<br>{% endif %}
-    {% if application.salary_text %}Salary: {{ application.salary_text }}<br>{% endif %}
-    {% if application.job_url %}<a href="{{ application.job_url }}">Job posting</a><br>{% endif %}
-  </p>
-</section>
-
-<section>
-  <h2>Timeline</h2>
-  <table>
-    <tr><th>Date</th><th>Status</th><th>Notes</th></tr>
-    {% for event in timeline %}
-    <tr>
-      <td>{{ event.event_date }}</td>
-      <td style="text-transform: capitalize;">{{ event.status }}</td>
-      <td>{{ event.notes or "" }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-</section>
+{% include "partials/application_detail_content.html" %}
 
 {% endblock %}
