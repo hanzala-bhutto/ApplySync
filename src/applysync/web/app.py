@@ -16,10 +16,13 @@ from applysync.llm import get_chat_model
 from applysync.pipeline.graph import reprocess_application
 from applysync.web.api import register_api_routes
 
-# Vite's default dev server origin. The React frontend and this API run as
-# two separate servers (by design, not just during development), so CORS is
-# needed rather than optional.
-_FRONTEND_DEV_ORIGIN = "http://localhost:5173"
+# The React frontend and this API run as two separate servers (by design,
+# not just during development), so CORS is needed rather than optional.
+# Matched by regex, not a fixed port: Vite falls back to the next free port
+# (5174, 5175, ...) whenever 5173 is already taken by another project's dev
+# server, which is common enough on a dev machine that hardcoding one port
+# would break this unpredictably.
+_FRONTEND_DEV_ORIGIN_REGEX = r"http://(localhost|127\.0\.0\.1):\d+"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -78,7 +81,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[_FRONTEND_DEV_ORIGIN],
+        allow_origin_regex=_FRONTEND_DEV_ORIGIN_REGEX,
         allow_methods=["*"],
         allow_headers=["*"],
     )
