@@ -6,9 +6,16 @@ eyeball whether extraction will have what it needs, without running any LLM.
 
 from __future__ import annotations
 
+import sys
+
 from applysync.config import get_settings, get_sources
 from applysync.gmail.client import GmailClient
 from applysync.gmail.query_builder import build_search_query
+
+# Email bodies can contain characters the Windows console codepage can't
+# render (e.g. invisible tracking marks some ATSs insert); never let a
+# display-only print crash this diagnostic script.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def main() -> None:
