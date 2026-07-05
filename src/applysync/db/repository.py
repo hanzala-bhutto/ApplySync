@@ -102,6 +102,46 @@ def add_status_event(
     return event
 
 
+STATUS_ORDER = ["applied", "viewed", "interview", "offer", "rejected", "other"]
+
+
+def applications_by_status(session: Session) -> dict[str, list[Application]]:
+    """Groups every application by current_status for the dashboard's kanban
+    board. Statuses in STATUS_ORDER always appear as a column even when
+    empty; any status not in that list (there shouldn't be one, but nothing
+    enforces it at the DB layer) still gets its own column rather than being
+    silently dropped.
+    """
+    board: dict[str, list[Application]] = {status: [] for status in STATUS_ORDER}
+    for application in session.exec(select(Application)).all():
+        board.setdefault(application.current_status, []).append(application)
+    return board
+
+
+def platform_breakdown(session: Session) -> list[dict]:
+    """Per-platform application counts and response rate (anything past
+    'applied' counts as a response) for the dashboard's breakdown view.
+    """
+    breakdown: dict[str, dict] = {}
+    for application in session.exec(select(Application)).all():
+        entry = breakdown.setdefault(
+            application.platform, {"platform": application.platform, "total": 0, "responded": 0}
+        )
+        entry["total"] += 1
+        if application.current_status != "applied":
+            entry["responded"] += 1
+    return sorted(breakdown.values(), key=lambda e: -e["total"])
+
+
+def application_timeline(session: Session, application_id: int) -> list[StatusEvent]:
+    statement = (
+        select(StatusEvent)
+        .where(StatusEvent.application_id == application_id)
+        .order_by(StatusEvent.event_date)
+    )
+    return list(session.exec(statement).all())
+
+
 def stale_applications(session: Session, *, days: int = 14) -> list[Application]:
     """Applications still in 'applied' status with no update in `days` days,
     used for the dashboard's follow-up reminders (a reporting query, not a

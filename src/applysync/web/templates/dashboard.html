@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}ApplySync{% endblock %}
+{% block content %}
+
+<section>
+  <h2>Follow-up reminders</h2>
+  {% if reminders %}
+    <table>
+      <tr><th>Company</th><th>Role</th><th>Platform</th><th>Applied</th></tr>
+      {% for application in reminders %}
+      <tr>
+        <td><a class="card-link" href="/applications/{{ application.id }}">{{ application.company_name }}</a></td>
+        <td>{{ application.job_title }}</td>
+        <td>{{ application.platform }}</td>
+        <td>{{ application.applied_date }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p>Nothing stale right now.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Pipeline</h2>
+  <div style="display: flex; gap: 1.5rem; overflow-x: auto;">
+    {% for status in status_order %}
+    <div style="min-width: 200px;">
+      <strong style="text-transform: capitalize;">{{ status }}</strong>
+      <span style="opacity: 0.6;">({{ board[status] | length }})</span>
+      <ul style="list-style: none; padding: 0;">
+        {% for application in board[status] %}
+        <li style="margin: 0.4rem 0;">
+          <a class="card-link" href="/applications/{{ application.id }}">
+            <div>{{ application.company_name }}</div>
+            <div style="font-size: 0.85rem; opacity: 0.7;">{{ application.job_title }}</div>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <h2>By platform</h2>
+  <table>
+    <tr><th>Platform</th><th>Total</th><th>Responded</th><th>Response rate</th></tr>
+    {% for row in breakdown %}
+    <tr>
+      <td>{{ row.platform }}</td>
+      <td>{{ row.total }}</td>
+      <td>{{ row.responded }}</td>
+      <td>{{ (100 * row.responded / row.total) | round(0, "floor") | int }}%</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+
+{% endblock %}
