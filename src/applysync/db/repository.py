@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta, timezone
 
 from sqlmodel import Session, select
 
 from applysync.db.models import Application, PipelineRun, ProcessedEmail, StatusEvent
+
+# Common legal-entity suffixes that show up inconsistently across emails for
+# the same real company (e.g. "EGYM" vs "EGYM SE" - two confirmation emails
+# for one application, extracted with different suffixes). Stripped only for
+# the match lookup below, never for what gets stored or displayed.
+_LEGAL_SUFFIXES = {
+    "se", "gmbh", "inc", "ltd", "ag", "co", "llc", "corp", "corporation", "limited", "plc",
+}
+
+
+def _normalize_for_matching(name: str) -> str:
+    normalized = re.sub(r"[.,]", "", name.lower().strip())
+    words = normalized.split()
+    while words and words[-1] in _LEGAL_SUFFIXES:
+        words.pop()
+    return " ".join(words)
 
 
 def _utcnow() -> datetime:
@@ -31,16 +48,28 @@ def mark_processed(
 def find_matching_application(
     session: Session, company_name: str, job_title: str, platform: str
 ) -> Application | None:
-    """Heuristic-first match: exact company + title + platform. Ambiguous
-    cases (near-duplicates, renamed titles) are the LLM-fallback's job in the
+    """Heuristic-first match: company + title + platform, normalized (case,
+    whitespace, legal suffixes) so e.g. "EGYM" and "EGYM SE" from two emails
+    for the same application still match. Remaining ambiguous cases (real
+    near-duplicates, renamed titles) are the LLM-fallback's job in the
     match_existing_application pipeline node, not this function.
+
+    Normalization happens in Python, not SQL, since matching now scans
+    candidates for the platform rather than doing an exact-equality WHERE -
+    fine at this project's scale (a personal application tracker, not a
+    high-volume table).
     """
-    statement = select(Application).where(
-        Application.company_name == company_name,
-        Application.job_title == job_title,
-        Application.platform == platform,
-    )
-    return session.exec(statement).first()
+    target_company = _normalize_for_matching(company_name)
+    target_title = _normalize_for_matching(job_title)
+
+    candidates = session.exec(select(Application).where(Application.platform == platform)).all()
+    for candidate in candidates:
+        if (
+            _normalize_for_matching(candidate.company_name) == target_company
+            and _normalize_for_matching(candidate.job_title) == target_title
+        ):
+            return candidate
+    return None
 
 
 def create_application(

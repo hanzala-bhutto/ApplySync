@@ -161,3 +161,38 @@ def test_repeat_confirmation_emails_without_job_title_dedupe_to_one_application(
     ]
     assert len(events) == 2
     assert len({e.application_id for e in events}) == 1
+
+
+def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_application(session):
+    """Regression test for the actual real-inbox finding: the same EGYM
+    application's two confirmation emails extracted as company_name "EGYM"
+    and "EGYM SE" respectively, which used to create two application rows.
+    """
+    model_first = FakeCombinedModel(
+        classify_content="RELEVANT",
+        extract_result=JobApplicationEvent(company_name="EGYM", job_title=None, status="applied"),
+    )
+    process_emails(
+        [_email(message_id="msg-1", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
+        model=model_first,
+        session=session,
+        sources=get_sources(),
+        run_id="run-1",
+        checkpointer=MemorySaver(),
+    )
+
+    model_second = FakeCombinedModel(
+        classify_content="RELEVANT",
+        extract_result=JobApplicationEvent(company_name="EGYM SE", job_title=None, status="applied"),
+    )
+    stats = process_emails(
+        [_email(message_id="msg-2", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
+        model=model_second,
+        session=session,
+        sources=get_sources(),
+        run_id="run-2",
+        checkpointer=MemorySaver(),
+    )
+
+    assert stats["applications_created"] == 0
+    assert stats["events_created"] == 1

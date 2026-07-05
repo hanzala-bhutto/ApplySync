@@ -34,6 +34,46 @@ def test_find_matching_application_returns_none_when_no_match(session):
     assert found is None
 
 
+def test_find_matching_application_ignores_legal_suffix_differences(session):
+    """Regression test for a real bug: two confirmation emails for the same
+    EGYM application extracted as "EGYM" and "EGYM SE" respectively, so the
+    old exact-match lookup created two application rows instead of one.
+    """
+    created = repo.create_application(
+        session,
+        company_name="EGYM",
+        job_title="(unspecified role)",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    found = repo.find_matching_application(
+        session, company_name="EGYM SE", job_title="(unspecified role)", platform="other"
+    )
+
+    assert found is not None
+    assert found.id == created.id
+
+
+def test_find_matching_application_normalizes_case_and_whitespace(session):
+    created = repo.create_application(
+        session,
+        company_name="Acme Corp",
+        job_title="Backend Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    found = repo.find_matching_application(
+        session, company_name="  acme corp  ", job_title="backend engineer", platform="linkedin"
+    )
+
+    assert found is not None
+    assert found.id == created.id
+
+
 def test_add_status_event_updates_application_current_status(session):
     application = repo.create_application(
         session,
