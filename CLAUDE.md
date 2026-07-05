@@ -116,7 +116,9 @@ scripts/gmail_probe.py
 
 ## Milestones (update status here as they land)
 
-- [ ] M1: Gmail read + manual extraction spike (`scripts/gmail_probe.py`)
+- [x] M1a: Gmail OAuth client, query builder, message parsing (code done, tested)
+- [ ] M1b: Manual extraction spike, run `scripts/gmail_probe.py` against real
+      inbox after `/gmail-setup`, hand-verify 5-10 samples per platform
 - [ ] M2: LangGraph pipeline + SQLite persistence + idempotency
 - [ ] M3: Web dashboard (status board, timeline, by-platform, reminders)
 - [ ] M4: Scheduler/automation
