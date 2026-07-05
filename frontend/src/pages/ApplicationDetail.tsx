@@ -1,17 +1,68 @@
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { getApplicationDetail } from '../lib/api'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  getApplicationDetail,
+  patchFields,
+  patchStatus,
+  postReprocess,
+  type Application,
+} from '../lib/api'
 import { avatarFor } from '../lib/avatar'
-import { statusStyle } from '../lib/status'
+import { statusStyle, STATUS_STYLES } from '../lib/status'
+import { useToast } from '../lib/toast'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 export function ApplicationDetail() {
   const { id } = useParams<{ id: string }>()
   const applicationId = Number(id)
+  const queryClient = useQueryClient()
+  const { showToast } = useToast()
+  const [editing, setEditing] = useState(false)
+  const [confirmReprocess, setConfirmReprocess] = useState(false)
 
+  const queryKey = ['application', applicationId]
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['application', applicationId],
+    queryKey,
     queryFn: () => getApplicationDetail(applicationId),
     enabled: Number.isFinite(applicationId),
+  })
+
+  function invalidate() {
+    queryClient.invalidateQueries({ queryKey })
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  const statusMutation = useMutation({
+    mutationFn: (status: string) => patchStatus(applicationId, status),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(queryKey, (old: typeof data) => (old ? { ...old, application: updated } : old))
+      invalidate()
+      showToast({ message: `Status set to ${updated.current_status}`, variant: 'success' })
+    },
+    onError: () => showToast({ message: 'Could not update status.', variant: 'error' }),
+  })
+
+  const fieldsMutation = useMutation({
+    mutationFn: (fields: { company_name: string; job_title: string; platform: string }) =>
+      patchFields(applicationId, fields),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(queryKey, (old: typeof data) => (old ? { ...old, application: updated } : old))
+      invalidate()
+      setEditing(false)
+      showToast({ message: 'Application updated.', variant: 'success' })
+    },
+    onError: () => showToast({ message: 'Could not save changes.', variant: 'error' }),
+  })
+
+  const reprocessMutation = useMutation({
+    mutationFn: () => postReprocess(applicationId),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(queryKey, (old: typeof data) => (old ? { ...old, application: updated } : old))
+      invalidate()
+      showToast({ message: 'Re-extracted from the original email.', variant: 'success' })
+    },
+    onError: () => showToast({ message: 'Reprocess failed.', variant: 'error' }),
   })
 
   if (isLoading) {
@@ -53,10 +104,21 @@ export function ApplicationDetail() {
               <p className="text-sm text-slate-500 dark:text-slate-400">{application.job_title}</p>
             </div>
           </div>
-          <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium capitalize ${style.bg} ${style.text}`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} aria-hidden="true" />
-            {application.current_status}
-          </span>
+
+          <div>
+            <label htmlFor="status-select" className="sr-only">Status</label>
+            <select
+              id="status-select"
+              value={application.current_status}
+              disabled={statusMutation.isPending}
+              onChange={(e) => statusMutation.mutate(e.target.value)}
+              className={`rounded-full border-0 px-2.5 py-1 text-xs font-medium capitalize focus:outline-none focus:ring-2 focus:ring-brand-300 ${style.bg} ${style.text}`}
+            >
+              {Object.keys(STATUS_STYLES).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <dl className="mb-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
@@ -81,6 +143,27 @@ export function ApplicationDetail() {
             </div>
           )}
         </dl>
+
+        <div className="flex gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            aria-expanded={editing}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+          >
+            {editing ? 'Cancel edit' : 'Edit'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmReprocess(true)}
+            disabled={reprocessMutation.isPending}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+          >
+            {reprocessMutation.isPending ? 'Reprocessing...' : 'Reprocess from email'}
+          </button>
+        </div>
+
+        {editing && <EditForm application={application} onSave={(fields) => fieldsMutation.mutate(fields)} saving={fieldsMutation.isPending} />}
       </section>
 
       <section>
@@ -106,6 +189,80 @@ export function ApplicationDetail() {
           </table>
         </div>
       </section>
+
+      <ConfirmDialog
+        open={confirmReprocess}
+        title="Reprocess from email?"
+        description="This re-runs extraction on the original email and overwrites the company, title, and status fields below with a fresh result."
+        confirmLabel="Reprocess"
+        onCancel={() => setConfirmReprocess(false)}
+        onConfirm={() => {
+          setConfirmReprocess(false)
+          reprocessMutation.mutate()
+        }}
+      />
     </div>
+  )
+}
+
+function EditForm({
+  application,
+  onSave,
+  saving,
+}: {
+  application: Application
+  onSave: (fields: { company_name: string; job_title: string; platform: string }) => void
+  saving: boolean
+}) {
+  const [companyName, setCompanyName] = useState(application.company_name)
+  const [jobTitle, setJobTitle] = useState(application.job_title)
+  const [platform, setPlatform] = useState(application.platform)
+
+  return (
+    <form
+      className="mt-4 space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSave({ company_name: companyName, job_title: jobTitle, platform })
+      }}
+    >
+      <div>
+        <label htmlFor="edit-company" className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Company</label>
+        <input
+          id="edit-company"
+          value={companyName}
+          onChange={(e) => setCompanyName(e.target.value)}
+          required
+          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
+        />
+      </div>
+      <div>
+        <label htmlFor="edit-title" className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Job title</label>
+        <input
+          id="edit-title"
+          value={jobTitle}
+          onChange={(e) => setJobTitle(e.target.value)}
+          required
+          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
+        />
+      </div>
+      <div>
+        <label htmlFor="edit-platform" className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Platform</label>
+        <input
+          id="edit-platform"
+          value={platform}
+          onChange={(e) => setPlatform(e.target.value)}
+          required
+          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
+        />
+      </div>
+      <button
+        type="submit"
+        disabled={saving}
+        className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
+      >
+        {saving ? 'Saving...' : 'Save'}
+      </button>
+    </form>
   )
 }
