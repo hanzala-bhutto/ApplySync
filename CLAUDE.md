@@ -288,10 +288,25 @@ scripts/gmail_probe.py
       (`create_all` only creates missing tables, never alters existing
       ones) - there is no migration tooling yet, so a schema change means
       deleting and recreating your local db for now.
-- [ ] M3c: "Connect Gmail" button using a web OAuth redirect flow (not the
-      installed-app local-server flow from the M1 CLI spike), so first-run
-      and any future re-consent happen inside the dashboard, not the
-      terminal.
+- [x] M3c: "Connect Gmail" button using a web OAuth redirect flow, so
+      first-run and any future re-consent happen inside the dashboard, not
+      the terminal. `web/gmail_oauth.py`: `GET /api/gmail/status` (token
+      presence/validity check), `GET /api/gmail/connect` (builds a
+      `google_auth_oauthlib.flow.Flow` and redirects to Google's consent
+      screen), `GET /api/gmail/callback` (exchanges the code, writes
+      `token.json`, redirects back to wherever the user started from via a
+      `return_to` param round-tripped through OAuth `state`). Reused the
+      existing Desktop-app `credentials.json` unchanged - Google's loopback
+      redirect rules (RFC 8252) accept any `http://localhost`/`127.0.0.1`
+      redirect URI for that client type, the same mechanism
+      `InstalledAppFlow.run_local_server(port=0)` already relied on, so no
+      separate "Web application" OAuth client was needed. Frontend:
+      `GmailConnectionBanner` in `Layout.tsx` shows a "Connect Gmail" banner
+      (real `<a>` navigation, not a fetch, since it has to walk through
+      Google's own pages) whenever disconnected, and handles the
+      `?gmail=connected`/`?gmail=error` redirect back with a toast + URL
+      cleanup. `/gmail-setup` skill updated to document both paths (CLI
+      first-run still works for `scripts/gmail_probe.py`).
 - [x] Perf + accuracy pass (post-M3, triggered by the user's real 238-application
       inbox only showing ~7-8 applications): fixed Gmail pagination (was
       silently capped at 50 emails ever), merged classify+extract into one

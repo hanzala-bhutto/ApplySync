@@ -117,3 +117,19 @@ export interface SourceEmail {
 export function getSourceEmail(eventId: number): Promise<SourceEmail> {
   return request(`/api/status-events/${eventId}/email`)
 }
+
+export interface GmailStatus {
+  connected: boolean
+}
+
+export function getGmailStatus(): Promise<GmailStatus> {
+  return request('/api/gmail/status')
+}
+
+/** Full page navigation, not a fetch - this walks through Google's consent
+ * screen and back, so it can't be an XHR/SPA route. `returnTo` is where the
+ * backend redirects the browser after the token exchange completes. */
+export function gmailConnectUrl(returnTo: string): string {
+  const params = new URLSearchParams({ return_to: returnTo })
+  return `${API_BASE}/api/gmail/connect?${params.toString()}`
+}

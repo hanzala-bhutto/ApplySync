@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link, NavLink } from 'react-router-dom'
+import { GmailConnectionBanner } from './components/GmailConnectionBanner'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
@@ -47,6 +48,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </span>
         </div>
       </header>
+      <GmailConnectionBanner />
       <main id="main-content" className="mx-auto max-w-7xl px-6 py-8">
         {children}
       </main>
