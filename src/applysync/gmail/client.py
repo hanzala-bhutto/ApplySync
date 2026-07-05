@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import html
 import logging
+import re
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -54,23 +56,57 @@ def parse_message(message: dict) -> RawEmail:
 
 
 def _extract_body(payload: dict) -> str:
-    if payload.get("mimeType") == "text/plain" and payload.get("body", {}).get("data"):
-        return _decode(payload["body"]["data"])
+    """Prefer text/plain anywhere in the MIME tree; fall back to text/html
+    (tag-stripped) for HTML-only emails, which several platforms send.
+    """
+    plain_part = _find_part(payload, "text/plain")
+    if plain_part is not None:
+        return _decode(plain_part["body"]["data"], _charset_of(plain_part))
 
-    parts = payload.get("parts") or []
-    for part in parts:
-        if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
-            return _decode(part["body"]["data"])
-    for part in parts:
-        text = _extract_body(part)
-        if text:
-            return text
+    html_part = _find_part(payload, "text/html")
+    if html_part is not None:
+        return _strip_html(_decode(html_part["body"]["data"], _charset_of(html_part)))
+
     return ""
 
 
-def _decode(data: str) -> str:
+def _find_part(payload: dict, mime_type: str) -> dict | None:
+    if payload.get("mimeType") == mime_type and payload.get("body", {}).get("data"):
+        return payload
+    for part in payload.get("parts") or []:
+        found = _find_part(part, mime_type)
+        if found is not None:
+            return found
+    return None
+
+
+def _charset_of(part: dict) -> str:
+    """Read the charset out of the part's own Content-Type header. Gmail API
+    parts do not always inherit UTF-8; several platforms (e.g. StepStone) send
+    Windows-1252/Latin-1 bodies, which otherwise decode to replacement chars.
+    """
+    for header in part.get("headers") or []:
+        if header.get("name", "").lower() == "content-type":
+            match = re.search(r'charset="?([\w-]+)"?', header.get("value", ""), re.IGNORECASE)
+            if match:
+                return match.group(1)
+    return "utf-8"
+
+
+def _decode(data: str, charset: str = "utf-8") -> str:
     padded = data + "=" * (-len(data) % 4)
-    return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    raw = base64.urlsafe_b64decode(padded)
+    try:
+        return raw.decode(charset, errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _strip_html(markup: str) -> str:
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", markup, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 class GmailClient:
