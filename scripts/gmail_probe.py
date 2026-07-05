@@ -6,9 +6,9 @@ eyeball whether extraction will have what it needs, without running any LLM.
 
 from __future__ import annotations
 
-from job_tracker.config import get_settings, get_sources
-from job_tracker.gmail.client import GmailClient
-from job_tracker.gmail.query_builder import build_search_query
+from applysync.config import get_settings, get_sources
+from applysync.gmail.client import GmailClient
+from applysync.gmail.query_builder import build_search_query
 
 
 def main() -> None:

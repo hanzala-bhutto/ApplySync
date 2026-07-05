@@ -1,5 +1,5 @@
 [project]
-name = "job-tracker"
+name = "applysync"
 version = "0.1.0"
 description = "Email-driven, LLM-extraction job application tracker built on LangGraph."
 requires-python = ">=3.11"
@@ -36,7 +36,7 @@ dev = [
 ]
 
 [project.scripts]
-job-tracker = "job_tracker.cli:app"
+applysync = "applysync.cli:app"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -1,4 +1,4 @@
-from job_tracker.config import get_sources
+from applysync.config import get_sources
 
 
 def test_sources_yaml_loads_expected_platforms():

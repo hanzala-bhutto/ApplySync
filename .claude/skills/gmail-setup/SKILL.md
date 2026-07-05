@@ -37,7 +37,7 @@ OAuth client, independent of any Claude Code session.
    asks for broader access than that, stop and check the code, that's a
    regression against the hard "readonly only" constraint in `CLAUDE.md`.
 6. **First run**: running the app's Gmail-connecting command (e.g.
-   `job-tracker sync` or `scripts/gmail_probe.py`) for the first time opens a
+   `applysync sync` or `scripts/gmail_probe.py`) for the first time opens a
    browser consent prompt. After granting, a `token.json` is cached (path per
    `.env`/config) so subsequent runs don't re-prompt.
 7. **Token refresh**: the client library refreshes automatically using the
