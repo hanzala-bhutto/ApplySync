@@ -120,7 +120,11 @@ scripts/gmail_probe.py
 - [ ] M1b: Manual extraction spike, run `scripts/gmail_probe.py` against real
       inbox after `/gmail-setup`, hand-verify 5-10 samples per platform
 - [ ] M2: LangGraph pipeline + SQLite persistence + idempotency
-- [ ] M3: Web dashboard (status board, timeline, by-platform, reminders)
+- [ ] M3: Web dashboard (status board, timeline, by-platform, reminders).
+      Include a "Connect Gmail" button using a web OAuth redirect flow
+      (not the installed-app local-server flow from the M1 CLI spike), so
+      first-run and any future re-consent happen inside the dashboard,
+      not the terminal.
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 
