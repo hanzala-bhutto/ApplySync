@@ -27,10 +27,10 @@ class PlatformSource(BaseModel):
     id: str
     label: str
     sender_domains: list[str]
-    subject_keywords: list[str]
 
 
 class SourcesConfig(BaseModel):
+    confirmation_keywords: list[str]
     platforms: list[PlatformSource]
 
 
