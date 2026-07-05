@@ -19,9 +19,11 @@ def sync() -> None:
 
 
 @app.command()
-def serve() -> None:
+def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
     """Run the web dashboard."""
-    typer.echo("serve: dashboard not implemented yet (see CLAUDE.md milestone M3)")
+    import uvicorn
+
+    uvicorn.run("applysync.web.app:app", host=host, port=port, reload=False)
 
 
 if __name__ == "__main__":

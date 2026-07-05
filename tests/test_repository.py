@@ -79,6 +79,83 @@ def test_stale_applications_finds_old_untouched_applied_rows(session):
     assert {a.company_name for a in stale} == {"OldCo"}
 
 
+def test_applications_by_status_groups_and_includes_empty_columns(session):
+    repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.create_application(
+        session,
+        company_name="Beta",
+        job_title="Engineer",
+        platform="indeed",
+        applied_date=date(2026, 1, 1),
+        current_status="rejected",
+    )
+
+    board = repo.applications_by_status(session)
+
+    assert [a.company_name for a in board["applied"]] == ["Acme"]
+    assert [a.company_name for a in board["rejected"]] == ["Beta"]
+    assert board["interview"] == []
+
+
+def test_platform_breakdown_counts_total_and_responded(session):
+    repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="A",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.create_application(
+        session,
+        company_name="Beta",
+        job_title="B",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="interview",
+    )
+
+    breakdown = repo.platform_breakdown(session)
+
+    assert breakdown == [{"platform": "linkedin", "total": 2, "responded": 1}]
+
+
+def test_application_timeline_orders_events_by_date(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="interview",
+        event_date=datetime(2026, 1, 10),
+        source_email_id="msg-2",
+    )
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="applied",
+        event_date=datetime(2026, 1, 1),
+        source_email_id="msg-1",
+    )
+
+    timeline = repo.application_timeline(session, application.id)
+
+    assert [e.source_email_id for e in timeline] == ["msg-1", "msg-2"]
+
+
 def test_pipeline_run_lifecycle(session):
     repo.create_pipeline_run(session, "run-1")
     finished = repo.finish_pipeline_run(
