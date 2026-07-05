@@ -87,6 +87,54 @@ def test_dashboard_shows_application_in_its_status_column(client):
     assert "Backend Engineer" in response.text
 
 
+def test_dashboard_filters_by_platform(client):
+    repo.create_application(
+        client.db_session, company_name="Acme", job_title="A", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+    repo.create_application(
+        client.db_session, company_name="Beta", job_title="B", platform="indeed",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+
+    response = client.get("/?platform=linkedin")
+
+    assert "Acme" in response.text
+    assert "Beta" not in response.text
+
+
+def test_dashboard_filters_by_company_substring(client):
+    repo.create_application(
+        client.db_session, company_name="Acme Corp", job_title="A", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+    repo.create_application(
+        client.db_session, company_name="Beta Inc", job_title="B", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+
+    response = client.get("/?company=acme")
+
+    assert "Acme Corp" in response.text
+    assert "Beta Inc" not in response.text
+
+
+def test_dashboard_filters_by_year(client):
+    repo.create_application(
+        client.db_session, company_name="OldCo", job_title="A", platform="linkedin",
+        applied_date=date(2024, 1, 1), current_status="applied",
+    )
+    repo.create_application(
+        client.db_session, company_name="NewCo", job_title="B", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+
+    response = client.get("/?year=2026")
+
+    assert "NewCo" in response.text
+    assert "OldCo" not in response.text
+
+
 def test_dashboard_shows_stale_application_as_reminder(client):
     repo.create_application(
         client.db_session,

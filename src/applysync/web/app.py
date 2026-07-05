@@ -51,16 +51,30 @@ def create_app() -> FastAPI:
     app = FastAPI(title="ApplySync")
 
     @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request, session: Session = Depends(get_session)):
+    def dashboard(
+        request: Request,
+        session: Session = Depends(get_session),
+        year: int | None = None,
+        platform: str | None = None,
+        company: str | None = None,
+        status: str | None = None,
+    ):
+        applications = repo.filtered_applications(
+            session, year=year, platform=platform, company=company, status=status
+        )
+        filtered_ids = {a.id for a in applications}
+        reminders = [a for a in repo.stale_applications(session) if a.id in filtered_ids]
         return templates.TemplateResponse(
             request,
             "dashboard.html",
             {
-                "board": repo.applications_by_status(session),
+                "board": repo.applications_by_status(applications),
                 "status_order": repo.STATUS_ORDER,
                 "status_styles": STATUS_STYLES,
-                "breakdown": repo.platform_breakdown(session),
-                "reminders": repo.stale_applications(session),
+                "breakdown": repo.platform_breakdown(applications),
+                "reminders": reminders,
+                "filter_options": repo.filter_options(session),
+                "filters": {"year": year, "platform": platform, "company": company, "status": status},
             },
         )
 

@@ -119,6 +119,68 @@ def test_stale_applications_finds_old_untouched_applied_rows(session):
     assert {a.company_name for a in stale} == {"OldCo"}
 
 
+def test_filtered_applications_by_year(session):
+    repo.create_application(
+        session, company_name="Acme", job_title="A", platform="linkedin",
+        applied_date=date(2025, 6, 1), current_status="applied",
+    )
+    repo.create_application(
+        session, company_name="Beta", job_title="B", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+
+    result = repo.filtered_applications(session, year=2026)
+
+    assert [a.company_name for a in result] == ["Beta"]
+
+
+def test_filtered_applications_by_platform_and_status(session):
+    repo.create_application(
+        session, company_name="Acme", job_title="A", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+    repo.create_application(
+        session, company_name="Beta", job_title="B", platform="indeed",
+        applied_date=date(2026, 1, 1), current_status="rejected",
+    )
+
+    result = repo.filtered_applications(session, platform="linkedin", status="applied")
+
+    assert [a.company_name for a in result] == ["Acme"]
+
+
+def test_filtered_applications_by_company_substring_case_insensitive(session):
+    repo.create_application(
+        session, company_name="Acme Corp", job_title="A", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+    repo.create_application(
+        session, company_name="Beta Inc", job_title="B", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+
+    result = repo.filtered_applications(session, company="acme")
+
+    assert [a.company_name for a in result] == ["Acme Corp"]
+
+
+def test_filter_options_returns_distinct_sorted_values(session):
+    repo.create_application(
+        session, company_name="Acme", job_title="A", platform="linkedin",
+        applied_date=date(2025, 1, 1), current_status="applied",
+    )
+    repo.create_application(
+        session, company_name="Beta", job_title="B", platform="indeed",
+        applied_date=date(2026, 1, 1), current_status="rejected",
+    )
+
+    options = repo.filter_options(session)
+
+    assert options["years"] == [2026, 2025]
+    assert options["platforms"] == ["indeed", "linkedin"]
+    assert options["statuses"] == repo.STATUS_ORDER
+
+
 def test_applications_by_status_groups_and_includes_empty_columns(session):
     repo.create_application(
         session,
@@ -137,7 +199,7 @@ def test_applications_by_status_groups_and_includes_empty_columns(session):
         current_status="rejected",
     )
 
-    board = repo.applications_by_status(session)
+    board = repo.applications_by_status(repo.filtered_applications(session))
 
     assert [a.company_name for a in board["applied"]] == ["Acme"]
     assert [a.company_name for a in board["rejected"]] == ["Beta"]
@@ -162,7 +224,7 @@ def test_platform_breakdown_counts_total_and_responded(session):
         current_status="interview",
     )
 
-    breakdown = repo.platform_breakdown(session)
+    breakdown = repo.platform_breakdown(repo.filtered_applications(session))
 
     assert breakdown == [{"platform": "linkedin", "total": 2, "responded": 1}]
 

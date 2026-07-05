@@ -198,25 +198,61 @@ def delete_application(session: Session, application_id: int) -> bool:
 STATUS_ORDER = ["applied", "viewed", "assessment", "interview", "offer", "rejected", "other"]
 
 
-def applications_by_status(session: Session) -> dict[str, list[Application]]:
-    """Groups every application by current_status for the dashboard's kanban
+def filtered_applications(
+    session: Session,
+    *,
+    year: int | None = None,
+    platform: str | None = None,
+    company: str | None = None,
+    status: str | None = None,
+) -> list[Application]:
+    """Single source of truth for the dashboard's filter bar. Callers derive
+    the board/breakdown views from this one filtered list rather than each
+    re-querying with their own filter logic.
+    """
+    statement = select(Application)
+    if platform:
+        statement = statement.where(Application.platform == platform)
+    if status:
+        statement = statement.where(Application.current_status == status)
+    applications = list(session.exec(statement).all())
+    if year:
+        applications = [a for a in applications if a.applied_date.year == year]
+    if company:
+        needle = company.strip().lower()
+        applications = [a for a in applications if needle in a.company_name.lower()]
+    return applications
+
+
+def filter_options(session: Session) -> dict:
+    """Distinct values to populate the dashboard's filter dropdowns."""
+    applications = session.exec(select(Application)).all()
+    return {
+        "years": sorted({a.applied_date.year for a in applications}, reverse=True),
+        "platforms": sorted({a.platform for a in applications}),
+        "statuses": STATUS_ORDER,
+    }
+
+
+def applications_by_status(applications: list[Application]) -> dict[str, list[Application]]:
+    """Groups applications by current_status for the dashboard's kanban
     board. Statuses in STATUS_ORDER always appear as a column even when
     empty; any status not in that list (there shouldn't be one, but nothing
     enforces it at the DB layer) still gets its own column rather than being
     silently dropped.
     """
     board: dict[str, list[Application]] = {status: [] for status in STATUS_ORDER}
-    for application in session.exec(select(Application)).all():
+    for application in applications:
         board.setdefault(application.current_status, []).append(application)
     return board
 
 
-def platform_breakdown(session: Session) -> list[dict]:
+def platform_breakdown(applications: list[Application]) -> list[dict]:
     """Per-platform application counts and response rate (anything past
     'applied' counts as a response) for the dashboard's breakdown view.
     """
     breakdown: dict[str, dict] = {}
-    for application in session.exec(select(Application)).all():
+    for application in applications:
         entry = breakdown.setdefault(
             application.platform, {"platform": application.platform, "total": 0, "responded": 0}
         )
