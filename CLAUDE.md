@@ -3,9 +3,9 @@
 ## What this is
 
 A self-hosted tool that reads the user's Gmail, uses an LLM pipeline to extract
-job-application data (company, title, platform, status) from platform emails
-(LinkedIn, Indeed, StepStone, jackandjill.ai, ...), and persists it to a local
-SQLite database viewable in a small web dashboard.
+job-application data (company, title, platform, status) from application
+confirmation emails, and persists it to a local SQLite database viewable in a
+small web dashboard.
 
 Two purposes, both load-bearing, don't optimize away either one:
 1. **Real utility**: one place to see every application and its status, instead
@@ -31,8 +31,19 @@ each session.
   folders there.
 - **LLM-based extraction, not per-platform parsers.** Don't write regex/HTML
   scrapers keyed to a specific platform's email template, that's the exact
-  brittleness this project avoids. New platforms get added via
-  `config/sources.yaml` (sender domains/keywords), not new parsing code.
+  brittleness this project avoids. New attribution vendors get added via
+  `config/sources.yaml`, not new parsing code.
+- **Gmail query is keyword-only, not sender-domain-restricted.** Confirmed
+  against a real inbox: application confirmations come from an unenumerable
+  set of senders (every ATS vendor, every company's own domain), so a domain
+  allowlist misses most of them (LinkedIn Easy Apply and jackandjill.ai send
+  no confirmation at all; direct/ATS confirmations come from arbitrary
+  domains like `smartrecruiters.com`, `personio.de`, `ashbyhq.com`,
+  `msg.join.com`, a company's own domain, etc., which cannot be enumerated in
+  advance). `build_search_query` filters on `confirmation_keywords` (subject
+  phrases) only. `sources.yaml`'s `platforms` list with `sender_domains` is
+  used only for best-effort dashboard labeling (`guess_platform`), never for
+  filtering what gets fetched.
 - **Observability is phase 2.** Don't add LangSmith/Langfuse tracing or eval
   scaffolding until the core pipeline (M1 through M4 below) works end-to-end. Don't
   gold-plate this early.
@@ -118,9 +129,18 @@ scripts/gmail_probe.py
 
 - [x] M1a: Gmail OAuth client, query builder, message parsing (code done, tested)
 - [x] M1b: Manual extraction spike, ran `scripts/gmail_probe.py` against the
-      real inbox (StepStone, Indeed, jackandjill.ai samples verified; no
-      LinkedIn sample seen yet, recheck when one exists). Found and fixed two
-      real bugs: HTML-only emails (jackandjill.ai) extracted as empty bodies
+      real inbox. Initial design (sender-domain allowlist: LinkedIn, Indeed,
+      StepStone, jackandjill.ai) turned out to be the wrong approach:
+      LinkedIn Easy Apply and jackandjill.ai send no confirmation emails at
+      all, and direct/ATS confirmations (SmartRecruiters, Personio, Ashby,
+      join.com, Teamtailor, Rippling, Workday, onlyfy.jobs, direct company
+      domains) come from senders that can't be enumerated upfront. Redesigned
+      to search by `confirmation_keywords` (subject phrase) only, with no
+      sender-domain restriction; verified against the real inbox, 25/25
+      results were genuine application confirmations with zero domain
+      filtering. `sources.yaml`'s `platforms`/`sender_domains` are now
+      attribution-only. Also found and fixed two real bugs: HTML-only emails
+      (jackandjill.ai) extracted as empty bodies
       (no text/plain part), and StepStone's Windows-1252 charset was being
       force-decoded as UTF-8, mangling apostrophes/umlauts.
 - [ ] M2: LangGraph pipeline + SQLite persistence + idempotency

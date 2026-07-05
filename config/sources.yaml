@@ -1,37 +1,89 @@
-# Platforms the Gmail query filter searches for and the classify_relevant
-# node recognizes. Add a new platform here first; only add code if a platform
-# genuinely can't be handled by LLM extraction from its emails alone.
+# The Gmail query is driven entirely by confirmation_keywords: application
+# confirmations arrive from an unenumerable set of senders (every ATS vendor,
+# every company's own domain), so filtering by sender domain misses most of
+# them (confirmed against a real inbox: SmartRecruiters, Personio, Ashby,
+# join.com, Teamtailor, Rippling, Workday, onlyfy.jobs, and direct company
+# domains all showed up with zero domain-based filtering). The subject
+# phrasing is the actual universal signal.
+confirmation_keywords:
+  - "thank you for applying"
+  - "thank you for your application"
+  - "thank you for your interest in"
+  - "application received"
+  - "we have received your application"
+  - "we've received your application"
+  - "your application has been received"
+  - "your application for"
+  - "application submitted"
+  - "successfully submitted"
+  - "application confirmation"
+  - bewerbung
+  - beworben
+
+# Known senders, used only for best-effort platform attribution (labeling
+# in the dashboard) once a message is already confirmed relevant by
+# classify_relevant. Never used to filter the Gmail query itself. Add a
+# vendor here when you notice one in the wild; anything unmatched still
+# gets processed, just without a friendly platform label yet.
 platforms:
   - id: linkedin
     label: LinkedIn
     sender_domains:
       - linkedin.com
-    subject_keywords:
-      - application
-      - applied
-      - "your application was sent"
 
   - id: indeed
     label: Indeed
     sender_domains:
       - indeed.com
-    subject_keywords:
-      - application
-      - applied
 
   - id: stepstone
     label: StepStone
     sender_domains:
       - stepstone.com
       - stepstone.de
-    subject_keywords:
-      - application
-      - bewerbung
 
   - id: jackandjill
     label: jackandjill.ai
     sender_domains:
       - jackandjill.ai
-    subject_keywords:
-      - application
-      - applied
+
+  - id: smartrecruiters
+    label: SmartRecruiters
+    sender_domains:
+      - smartrecruiters.com
+
+  - id: personio
+    label: Personio
+    sender_domains:
+      - personio.de
+      - personio.com
+
+  - id: ashby
+    label: Ashby
+    sender_domains:
+      - ashbyhq.com
+
+  - id: join
+    label: join.com
+    sender_domains:
+      - msg.join.com
+
+  - id: teamtailor
+    label: Teamtailor
+    sender_domains:
+      - teamtailor-mail.com
+
+  - id: rippling
+    label: Rippling ATS
+    sender_domains:
+      - ats.rippling.com
+
+  - id: workday
+    label: Workday
+    sender_domains:
+      - myworkday.com
+
+  - id: onlyfy
+    label: onlyfy.jobs
+    sender_domains:
+      - onlyfy.jobs
