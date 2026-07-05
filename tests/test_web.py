@@ -1,66 +1,14 @@
 import base64
 from datetime import date, datetime
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
-
 from applysync.db import repository as repo
 from applysync.pipeline.state import ClassifyAndExtractResult
-from applysync.web.app import create_app, get_gmail_client, get_llm_model, get_session
-from tests.fakes import FakeExtractModel, FakeStructuredModel
+from applysync.web.app import get_gmail_client, get_llm_model
+from tests.fakes import FakeExtractModel, FakeGmailClient, FakeStructuredModel
 
 
 def _b64(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
-
-
-class FakeGmailService:
-    def __init__(self, raw_message: dict):
-        self._raw_message = raw_message
-
-    def users(self):
-        return self
-
-    def messages(self):
-        return self
-
-    def get(self, userId, id, format):
-        return self
-
-    def execute(self):
-        return self._raw_message
-
-
-class FakeGmailClient:
-    def __init__(self, raw_message: dict):
-        self.service = FakeGmailService(raw_message)
-
-
-@pytest.fixture
-def client():
-    # StaticPool: FastAPI's TestClient runs sync routes on a worker thread,
-    # and without a shared single connection, a fresh (tableless) in-memory
-    # SQLite DB gets created for that thread instead of reusing this one.
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
-    SQLModel.metadata.create_all(engine)
-    test_session = Session(engine)
-
-    app = create_app()
-
-    def override_get_session():
-        yield test_session
-
-    app.dependency_overrides[get_session] = override_get_session
-
-    with TestClient(app) as c:
-        c.db_session = test_session
-        yield c
-
-    test_session.close()
 
 
 def test_dashboard_loads_with_no_applications(client):

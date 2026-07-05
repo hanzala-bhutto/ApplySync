@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session
@@ -13,6 +14,12 @@ from applysync.db.init_db import get_engine, init_db
 from applysync.gmail.client import GmailClient
 from applysync.llm import get_chat_model
 from applysync.pipeline.graph import reprocess_application
+from applysync.web.api import register_api_routes
+
+# Vite's default dev server origin. The React frontend and this API run as
+# two separate servers (by design, not just during development), so CORS is
+# needed rather than optional.
+_FRONTEND_DEV_ORIGIN = "http://localhost:5173"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -68,6 +75,14 @@ def get_llm_model():
 
 def create_app() -> FastAPI:
     app = FastAPI(title="ApplySync")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[_FRONTEND_DEV_ORIGIN],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    register_api_routes(app, get_session=get_session, get_gmail_client=get_gmail_client, get_llm_model=get_llm_model)
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(

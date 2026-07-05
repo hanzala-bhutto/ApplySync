@@ -31,3 +31,25 @@ class FakeExtractModel:
 
     def with_retry(self, **kwargs):
         return self
+
+
+class FakeGmailService:
+    def __init__(self, raw_message: dict):
+        self._raw_message = raw_message
+
+    def users(self):
+        return self
+
+    def messages(self):
+        return self
+
+    def get(self, userId, id, format):
+        return self
+
+    def execute(self):
+        return self._raw_message
+
+
+class FakeGmailClient:
+    def __init__(self, raw_message: dict):
+        self.service = FakeGmailService(raw_message)
