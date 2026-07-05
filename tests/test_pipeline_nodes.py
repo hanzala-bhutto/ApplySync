@@ -1,11 +1,10 @@
-from datetime import date, datetime
-
-import pytest
+from datetime import date
 
 from applysync.config import get_sources
 from applysync.db import repository as repo
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.nodes import (
+    UNSPECIFIED_JOB_TITLE,
     make_classify_node,
     make_extract_node,
     make_match_node,
@@ -13,44 +12,7 @@ from applysync.pipeline.nodes import (
     make_upsert_node,
 )
 from applysync.pipeline.state import JobApplicationEvent, MatchDecision
-
-
-class FakeResponse:
-    def __init__(self, content: str):
-        self.content = content
-
-
-class FakeChatModel:
-    """Mocks the LangChain model boundary for classify_relevant: .invoke
-    returns an object with .content, same shape as a real ChatNVIDIA response.
-    """
-
-    def __init__(self, content: str):
-        self._content = content
-
-    def invoke(self, messages):
-        return FakeResponse(self._content)
-
-
-class FakeStructuredModel:
-    def __init__(self, result=None, exception=None):
-        self._result = result
-        self._exception = exception
-
-    def invoke(self, messages):
-        if self._exception is not None:
-            raise self._exception
-        return self._result
-
-
-class FakeExtractModel:
-    """Mocks .with_structured_output(...).invoke(...) for extract_structured_data."""
-
-    def __init__(self, structured_model: FakeStructuredModel):
-        self._structured_model = structured_model
-
-    def with_structured_output(self, schema):
-        return self._structured_model
+from tests.fakes import FakeChatModel, FakeExtractModel, FakeStructuredModel
 
 
 def _email(sender="jobs@linkedin.com", subject="Your application was sent", body="body text"):
@@ -107,6 +69,16 @@ def test_extract_structured_data_missing_required_fields_routes_to_error():
 
     assert result["extracted"] is None
     assert result["error"] == "missing_required_fields"
+
+
+def test_extract_structured_data_missing_job_title_normalizes_instead_of_erroring():
+    event = JobApplicationEvent(company_name="EGYM", job_title=None, status="applied")
+    node = make_extract_node(FakeExtractModel(FakeStructuredModel(result=event)))
+
+    result = node({"email": _email(), "platform_hint": "other"})
+
+    assert result["error"] is None
+    assert result["extracted"].job_title == UNSPECIFIED_JOB_TITLE
 
 
 def test_extract_structured_data_llm_failure_routes_to_error_without_raising():

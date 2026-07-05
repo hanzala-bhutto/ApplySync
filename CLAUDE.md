@@ -97,16 +97,50 @@ information):
 
 ## LangGraph pipeline nodes
 
-1. `fetch_emails`: filtered Gmail query, excludes already-processed ids.
-2. `classify_relevant`: is this a job-application email, which platform?
-3. `extract_structured_data`: structured-output extraction into
-   `JobApplicationEvent` (Pydantic); low-confidence/missing-field results route
-   to an errors path instead of continuing.
-4. `match_existing_application`: new vs. update-existing vs. duplicate;
-   heuristic-first, LLM fallback only for ambiguous matches.
-5. `upsert_db`: deterministic, no LLM.
+The compiled graph (`pipeline/graph.py::build_graph`) processes **one email
+per invocation** (`process_emails` loops over the batch, calling
+`graph.invoke` once per new email with `thread_id=message_id`).
+`fetch_emails` is therefore NOT a graph node: it is a plain batch fetch in
+`process_emails`/`run_sync`, since per-node execution here operates on a
+single email. `processed_emails` (checked before invoking the graph at all)
+is the idempotency guard; the `SqliteSaver` checkpointer wired into `compile()`
+is crash-recovery only.
+
+1. `classify_relevant`: is this a job-application email? Conditional edge:
+   relevant -> `extract_structured_data`, irrelevant -> `mark_irrelevant`.
+2. `extract_structured_data`: structured-output extraction into
+   `JobApplicationEvent` (Pydantic). Conditional edge: only `company_name`
+   missing routes to `mark_extraction_failed` (an error state, not a crash);
+   a missing `job_title` is normalized to a fixed sentinel
+   (`nodes.UNSPECIFIED_JOB_TITLE`) instead, found necessary after a real
+   email (EGYM, no title in the body) got two different hallucinated
+   placeholders ("Not specified" / "Unknown") on two separate runs, which
+   silently created two application rows instead of deduping to one.
+3. `match_existing_application`: new vs. update-existing vs. duplicate.
+   Currently heuristic-only (exact company+title+platform match via
+   `repository.find_matching_application`); an LLM fallback for ambiguous
+   near-duplicates is not yet implemented, worth adding if the exact-match
+   heuristic proves too strict in practice.
+4. `upsert_db`: deterministic, no LLM. Always calls `mark_processed`
+   regardless of new/update/duplicate_skip.
+5. `mark_irrelevant` / `mark_extraction_failed`: both just call
+   `mark_processed` with a different `classification` value and write no
+   application/event rows, so skipped emails are never retried but the
+   reason they were skipped is recorded.
 
 Follow-up reminders are a dashboard SQL query, not a graph node.
+
+**LLM**: `nvidia/nemotron-3-ultra-550b-a55b` via `langchain-nvidia-ai-endpoints`
+(`ChatNVIDIA`), chosen for native tool-calling/structured-output fine-tuning.
+Two things required after hitting them against the real API:
+- **Client-side rate limiting** (`llm.py`, `InMemoryRateLimiter` at 40
+  requests/min): NVIDIA's free tier caps at 40 RPM and returns a 503
+  ("Worker local total request limit reached") past it; throttling
+  client-side avoids burning retry/backoff time on avoidable 503s.
+- **`.with_retry(stop_after_attempt=5, wait_exponential_jitter=True)`** on
+  both the classify and extract model calls, for genuinely transient
+  failures (the free tier is a shared pool, so 503s can still happen even
+  under our own 40 RPM cap from other users' load).
 
 ## Repo layout
 
@@ -143,7 +177,19 @@ scripts/gmail_probe.py
       (jackandjill.ai) extracted as empty bodies
       (no text/plain part), and StepStone's Windows-1252 charset was being
       force-decoded as UTF-8, mangling apostrophes/umlauts.
-- [ ] M2: LangGraph pipeline + SQLite persistence + idempotency
+- [x] M2: LangGraph pipeline + SQLite persistence + idempotency. Built in
+      three parts: M2a (SQLModel schema + repository), M2b (node factories,
+      unit tested with fake models), M2c (graph wiring + checkpointing).
+      Verified against the real inbox + real NVIDIA API (not just unit
+      tests): correctly classified a rejection whose subject said "thank you
+      for your application" (Nagarro), correctly attributed platforms via
+      `sources.yaml` including a correct fallback to "other" for a direct
+      company domain (EGYM). Found and fixed one real bug (see LangGraph
+      pipeline nodes section: job_title placeholder hallucination causing
+      duplicate application rows) and one real infra issue (free-tier rate
+      limiting, see LLM section above). Idempotency (double-run = 0 new
+      rows) and status-update-links-not-duplicates both verified by
+      automated tests in `tests/test_graph.py`.
 - [ ] M3: Web dashboard (status board, timeline, by-platform, reminders).
       Include a "Connect Gmail" button using a web OAuth redirect flow
       (not the installed-app local-server flow from the M1 CLI spike), so

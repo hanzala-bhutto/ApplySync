@@ -14,6 +14,13 @@ from applysync.pipeline.state import EmailState, JobApplicationEvent, MatchDecis
 
 logger = logging.getLogger(__name__)
 
+# Canonical stand-in when an email genuinely doesn't mention a job title
+# (some ATS confirmations don't repeat it). Using one fixed string, not
+# whatever placeholder text the model might otherwise invent, is what lets
+# find_matching_application dedupe repeat emails from the same company that
+# also lack a title, instead of creating a new application row each time.
+UNSPECIFIED_JOB_TITLE = "(unspecified role)"
+
 _CLASSIFY_PROMPT = """You triage inbox emails for a personal job application tracker.
 
 Decide whether this email is a genuine job-application confirmation or status
@@ -31,7 +38,11 @@ Respond with exactly one word: RELEVANT or IRRELEVANT."""
 
 _EXTRACT_PROMPT = """Extract job application details from this email.
 
-If a field is not mentioned in the email, leave it null, do not guess.
+If a field is not mentioned in the email, leave it null, do not guess and do
+not invent placeholder text such as "not specified" or "unknown" - null means
+null. This matters especially for job_title: some confirmation emails never
+repeat the job title, in which case it must be null, not a made-up string.
+
 Platform hint from the sender address (may be wrong or absent): {platform_hint}
 
 Subject: {subject}
@@ -41,6 +52,11 @@ Body:
 
 
 def make_classify_node(model, sources: SourcesConfig):
+    # NVIDIA's free-tier NIM endpoints can return a transient 503
+    # ("Worker local total request limit reached") under shared load;
+    # with_retry is LangChain's built-in backoff, not a hand-rolled loop.
+    resilient_model = model.with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
+
     def classify_relevant(state: EmailState) -> dict:
         email = state["email"]
         platform_hint = guess_platform(email.sender, sources)
@@ -48,7 +64,7 @@ def make_classify_node(model, sources: SourcesConfig):
         prompt = _CLASSIFY_PROMPT.format(
             sender=email.sender, subject=email.subject, body=email.body[:2000]
         )
-        response = model.invoke([HumanMessage(content=prompt)])
+        response = resilient_model.invoke([HumanMessage(content=prompt)])
         text = response.content.strip().upper()
         classification = "relevant" if "IRRELEVANT" not in text and "RELEVANT" in text else "irrelevant"
 
@@ -58,7 +74,9 @@ def make_classify_node(model, sources: SourcesConfig):
 
 
 def make_extract_node(model):
-    structured_model = model.with_structured_output(JobApplicationEvent)
+    structured_model = model.with_structured_output(JobApplicationEvent).with_retry(
+        stop_after_attempt=5, wait_exponential_jitter=True
+    )
 
     def extract_structured_data(state: EmailState) -> dict:
         email = state["email"]
@@ -74,8 +92,11 @@ def make_extract_node(model):
             logger.warning("extraction failed for message %s: %s", email.message_id, exc)
             return {"extracted": None, "error": f"extraction_failed: {exc}"}
 
-        if not extracted.company_name or not extracted.job_title:
+        if not extracted.company_name:
             return {"extracted": None, "error": "missing_required_fields"}
+
+        if not extracted.job_title:
+            extracted = extracted.model_copy(update={"job_title": UNSPECIFIED_JOB_TITLE})
 
         return {"extracted": extracted, "error": None}
 

@@ -14,7 +14,11 @@ class JobApplicationEvent(BaseModel):
     """
 
     company_name: str = Field(description="Company the application was sent to")
-    job_title: str = Field(description="Job title applied for")
+    job_title: str | None = Field(
+        default=None,
+        description="Job title applied for. Null if the email genuinely does not "
+        "mention one, never a placeholder like 'not specified' or 'unknown'.",
+    )
     status: Literal["applied", "viewed", "interview", "rejected", "offer", "other"]
     job_url: str | None = Field(default=None, description="Link to the application or posting, if present")
     location: str | None = Field(default=None, description="Job location, if mentioned")
