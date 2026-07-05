@@ -1,0 +1,37 @@
+# Platforms the Gmail query filter searches for and the classify_relevant
+# node recognizes. Add a new platform here first; only add code if a platform
+# genuinely can't be handled by LLM extraction from its emails alone.
+platforms:
+  - id: linkedin
+    label: LinkedIn
+    sender_domains:
+      - linkedin.com
+    subject_keywords:
+      - application
+      - applied
+      - "your application was sent"
+
+  - id: indeed
+    label: Indeed
+    sender_domains:
+      - indeed.com
+    subject_keywords:
+      - application
+      - applied
+
+  - id: stepstone
+    label: StepStone
+    sender_domains:
+      - stepstone.com
+      - stepstone.de
+    subject_keywords:
+      - application
+      - bewerbung
+
+  - id: jackandjill
+    label: jackandjill.ai
+    sender_domains:
+      - jackandjill.ai
+    subject_keywords:
+      - application
+      - applied
