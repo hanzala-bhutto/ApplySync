@@ -1,11 +1,28 @@
-import { useSearchParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { getDashboard, type DashboardFilters } from '../lib/api'
+import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  DndContext,
+  useDraggable,
+  useDroppable,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { CSS } from '@dnd-kit/utilities'
+import { motion } from 'framer-motion'
+import { getDashboard, patchStatus, type Application, type DashboardFilters, type DashboardResponse } from '../lib/api'
 import { avatarFor } from '../lib/avatar'
 import { statusStyle } from '../lib/status'
+import { useToast } from '../lib/toast'
 
 export function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { showToast } = useToast()
 
   const filters: DashboardFilters = {
     year: searchParams.get('year') ?? undefined,
@@ -13,11 +30,83 @@ export function Dashboard() {
     company: searchParams.get('company') ?? undefined,
     status: searchParams.get('status') ?? undefined,
   }
+  const queryKey = ['dashboard', filters]
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['dashboard', filters],
+    queryKey,
     queryFn: () => getDashboard(filters),
   })
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) => patchStatus(id, status),
+    onMutate: async ({ id, status }) => {
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData<DashboardResponse>(queryKey)
+      if (previous) {
+        queryClient.setQueryData<DashboardResponse>(queryKey, (old) => moveApplication(old, id, status))
+      }
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous)
+      showToast({ message: 'Could not update status. Reverted.', variant: 'error' })
+    },
+  })
+
+  function moveApplication(board: DashboardResponse | undefined, id: number, newStatus: string): DashboardResponse | undefined {
+    if (!board) return board
+    let moved: Application | undefined
+    const nextBoard: Record<string, Application[]> = {}
+    for (const [status, apps] of Object.entries(board.board)) {
+      nextBoard[status] = apps.filter((a) => {
+        if (a.id === id) {
+          moved = { ...a, current_status: newStatus }
+          return false
+        }
+        return true
+      })
+    }
+    if (!moved) return board
+    nextBoard[newStatus] = [...(nextBoard[newStatus] ?? []), moved]
+    return { ...board, board: nextBoard }
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over) return
+    const applicationId = active.data.current?.applicationId as number | undefined
+    const oldStatus = active.data.current?.currentStatus as string | undefined
+    const newStatus = over.data.current?.status as string | undefined
+    const companyName = active.data.current?.companyName as string | undefined
+    if (!applicationId || !newStatus || !oldStatus || newStatus === oldStatus) return
+
+    statusMutation.mutate(
+      { id: applicationId, status: newStatus },
+      {
+        onSuccess: () => {
+          showToast({
+            message: `Moved ${companyName ?? 'application'} to ${newStatus}`,
+            variant: 'success',
+            action: {
+              label: 'Undo',
+              onClick: () => statusMutation.mutate({ id: applicationId, status: oldStatus }),
+            },
+          })
+        },
+      }
+    )
+  }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    // dnd-kit's default binds BOTH Space and Enter to start/end a drag,
+    // which would fight with Enter opening the card (the button's native
+    // keyboard behavior). Restrict drag activation to Space only, so Enter
+    // stays free to just click through.
+    useSensor(KeyboardSensor, {
+      keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space'] },
+    })
+  )
 
   function updateFilter(key: string, value: string) {
     const next = new URLSearchParams(searchParams)
@@ -112,58 +201,17 @@ export function Dashboard() {
       <section className="mb-10">
         <div className="mb-4 flex items-baseline justify-between">
           <h1 className="text-xl font-bold tracking-tight">Pipeline</h1>
-          <span className="text-xs text-slate-400 dark:text-slate-500">drag a card to correct its status</span>
+          <span className="text-xs text-slate-400 dark:text-slate-500">
+            drag a card to correct its status (or focus it and press Space)
+          </span>
         </div>
-        <div className="flex gap-4 overflow-x-auto pb-2">
-          {data.status_order.map((status) => {
-            const style = statusStyle(status)
-            const applications = data.board[status] ?? []
-            return (
-              <div
-                key={status}
-                className="flex max-h-[75vh] w-72 shrink-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
-              >
-                <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-3.5 py-3 dark:border-slate-800">
-                  <span className={`h-2 w-2 rounded-full ${style.dot}`} aria-hidden="true" />
-                  <span className="text-sm font-semibold capitalize">{status}</span>
-                  <span className="ml-auto rounded-full bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                    {applications.length}
-                  </span>
-                </div>
-                <div className="min-h-16 flex-1 space-y-2 overflow-y-auto p-2.5">
-                  {applications.map((application) => {
-                    const av = avatarFor(application.company_name)
-                    return (
-                      <Link
-                        key={application.id}
-                        to={`/applications/${application.id}`}
-                        className="block rounded-lg border border-slate-100 bg-white p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-800/60"
-                      >
-                        <div className="flex items-start gap-2.5">
-                          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${av.bg} text-xs font-bold text-white`}>
-                            {av.initial}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-semibold leading-tight">{application.company_name}</div>
-                            <div className="truncate text-xs leading-tight text-slate-500 dark:text-slate-400">{application.job_title}</div>
-                            <div className={`mt-1.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium capitalize ${style.bg} ${style.text}`}>
-                              {application.platform}
-                            </div>
-                          </div>
-                        </div>
-                      </Link>
-                    )
-                  })}
-                  {applications.length === 0 && (
-                    <div className="flex h-16 items-center justify-center rounded-lg border border-dashed border-slate-200 text-xs text-slate-300 dark:border-slate-800 dark:text-slate-600">
-                      Empty
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <div className="flex gap-4 overflow-x-auto pb-2">
+            {data.status_order.map((status) => (
+              <KanbanColumn key={status} status={status} applications={data.board[status] ?? []} onOpen={(id) => navigate(`/applications/${id}`)} />
+            ))}
+          </div>
+        </DndContext>
       </section>
 
       {data.reminders.length > 0 && (
@@ -171,10 +219,10 @@ export function Dashboard() {
           <h2 className="mb-3 text-sm font-semibold text-slate-500 dark:text-slate-400">Follow-up reminders</h2>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {data.reminders.map((application) => (
-              <Link
+              <button
                 key={application.id}
-                to={`/applications/${application.id}`}
-                className="flex items-center gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 transition-colors hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:hover:bg-amber-950/70"
+                onClick={() => navigate(`/applications/${application.id}`)}
+                className="flex items-center gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-left transition-colors hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:hover:bg-amber-950/70"
               >
                 <svg className="h-4 w-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
@@ -185,7 +233,7 @@ export function Dashboard() {
                     applied {application.applied_date}, no update since
                   </div>
                 </div>
-              </Link>
+              </button>
             ))}
           </div>
         </section>
@@ -212,5 +260,87 @@ export function Dashboard() {
         </div>
       </section>
     </div>
+  )
+}
+
+function KanbanColumn({
+  status,
+  applications,
+  onOpen,
+}: {
+  status: string
+  applications: Application[]
+  onOpen: (id: number) => void
+}) {
+  const style = statusStyle(status)
+  const { setNodeRef, isOver } = useDroppable({ id: `column-${status}`, data: { status } })
+
+  return (
+    <div className="flex max-h-[75vh] w-72 shrink-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-3.5 py-3 dark:border-slate-800">
+        <span className={`h-2 w-2 rounded-full ${style.dot}`} aria-hidden="true" />
+        <span className="text-sm font-semibold capitalize">{status}</span>
+        <span className="ml-auto rounded-full bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+          {applications.length}
+        </span>
+      </div>
+      <div
+        ref={setNodeRef}
+        className={`min-h-16 flex-1 space-y-2 overflow-y-auto p-2.5 transition-colors ${isOver ? 'bg-brand-50 dark:bg-brand-950/40' : ''}`}
+      >
+        {applications.map((application) => (
+          <KanbanCard key={application.id} application={application} onOpen={onOpen} />
+        ))}
+        {applications.length === 0 && (
+          <div className="flex h-16 items-center justify-center rounded-lg border border-dashed border-slate-200 text-xs text-slate-300 dark:border-slate-800 dark:text-slate-600">
+            Empty
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function KanbanCard({ application, onOpen }: { application: Application; onOpen: (id: number) => void }) {
+  const av = avatarFor(application.company_name)
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `application-${application.id}`,
+    data: {
+      applicationId: application.id,
+      currentStatus: application.current_status,
+      companyName: application.company_name,
+    },
+  })
+
+  return (
+    <motion.div layout transition={{ duration: 0.2 }}>
+      <button
+        ref={setNodeRef}
+        {...listeners}
+        {...attributes}
+        onClick={() => onOpen(application.id)}
+        aria-label={`${application.company_name}, ${application.job_title}, status ${application.current_status}. Press Enter to open, Space to move.`}
+        style={{
+          transform: transform ? CSS.Translate.toString(transform) : undefined,
+          opacity: isDragging ? 0.5 : 1,
+        }}
+        className="block w-full cursor-grab rounded-lg border border-slate-100 bg-white p-3 text-left shadow-sm transition-shadow hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500 active:cursor-grabbing dark:border-slate-800 dark:bg-slate-800/60"
+      >
+        <div className="flex items-start gap-2.5">
+          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${av.bg} text-xs font-bold text-white`}>
+            {av.initial}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold leading-tight">{application.company_name}</div>
+            <div className="truncate text-xs leading-tight text-slate-500 dark:text-slate-400">{application.job_title}</div>
+            <div
+              className={`mt-1.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium capitalize ${statusStyle(application.current_status).bg} ${statusStyle(application.current_status).text}`}
+            >
+              {application.platform}
+            </div>
+          </div>
+        </div>
+      </button>
+    </motion.div>
   )
 }

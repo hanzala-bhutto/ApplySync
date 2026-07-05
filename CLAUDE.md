@@ -341,13 +341,50 @@ scripts/gmail_probe.py
       (`/openapi.json`) are actually useful, not just raw untyped dicts.
       `python-multipart`/`jinja2` dropped from dependencies (no longer used
       now that nothing renders HTML server-side or parses form bodies).
-- [ ] React migration 4/4: port interactivity (drag-and-drop status
-      correction, inline field edit, reprocess) to React with dnd-kit +
-      Framer Motion, accessibility pass, Playwright E2E tests. The React
-      dashboard is currently read-only (view + filter + navigate only) -
-      those actions exist in the API (`PATCH .../status`, `PATCH
-      .../{id}`, `POST .../reprocess`) but nothing in the frontend calls
-      them yet.
+- [x] React migration 4/4a: interactivity + animation.
+      - Drag-and-drop status correction: `@dnd-kit/core` (not `@dnd-kit/sortable`
+        - we need cross-column moves, not in-column reordering).
+        `PointerSensor` with `activationConstraint: {distance: 8}` so a card
+        is still a normal clickable `<button>` (small movements are clicks,
+        not drags). Optimistic update via TanStack Query's
+        `onMutate`/`onError` (instant board update, rollback on failure) plus
+        a success toast with an **Undo** action (re-mutates back to the old
+        status) - drag-and-drop must never be a one-way door, per the
+        NNGroup "user control and freedom" heuristic.
+      - **Keyboard drag conflict, found and fixed**: dnd-kit's default
+        `KeyboardCodes` bind *both* Space and Enter to start/end a drag. Since
+        cards are real `<button>`s (Enter = native click = open detail page),
+        leaving Enter bound to drag-start would fight the button's own
+        keyboard behavior. Fixed by passing
+        `keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space'] }`
+        to `useSensor(KeyboardSensor, ...)` - Enter opens, Space grabs/drops.
+      - Base `@dnd-kit/core`'s keyboard coordinate getter moves the dragged
+        item by fixed pixel deltas per arrow press, not "snap to nearest
+        column" - reaching a distant column by keyboard may take several
+        presses. Accepted as a known limitation rather than writing a custom
+        coordinate getter; the `<select>` on the detail page (see below) is
+        the fully robust keyboard/screen-reader path for the same action,
+        per the accessibility principle that drag-and-drop should never be
+        the *only* way to do something.
+      - Detail page: inline edit form (toggle, not always visible), a plain
+        `<select>` for status (the robust non-drag path mentioned above),
+        and a reprocess button gated behind `ConfirmDialog` (native
+        `<dialog>` element - free focus trapping/ESC-to-close/correct
+        screen-reader dialog semantics, not hand-rolled ARIA).
+      - `lib/toast.tsx`: a small `aria-live="polite"` toast system (own
+        code, not a dependency) supporting an optional action button, used
+        for every mutation's success/error feedback - "visibility of system
+        status" and "help users recognize/diagnose/recover from errors"
+        heuristics, not just decoration.
+      - Framer Motion's `layout` prop on each card animates the position
+        shift when a card moves between columns.
+      - TypeScript compiles clean, production build succeeds. Not yet
+        verified in a live browser this session - see the constraint above
+        about not running dev servers via Claude Code's own tools; verified
+        by the user in their own already-running terminals instead.
+- [ ] React migration 4/4b: Playwright E2E tests, broader accessibility
+      audit (color contrast, screen reader pass on the actual rendered
+      page, not just code review).
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 

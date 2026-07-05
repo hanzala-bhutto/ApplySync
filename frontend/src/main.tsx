@@ -6,20 +6,23 @@ import './index.css'
 import { Layout } from './Layout'
 import { Dashboard } from './pages/Dashboard'
 import { ApplicationDetail } from './pages/ApplicationDetail'
+import { ToastProvider } from './lib/toast'
 
 const queryClient = new QueryClient()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/applications/:id" element={<ApplicationDetail />} />
-          </Routes>
-        </Layout>
-      </BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/applications/:id" element={<ApplicationDetail />} />
+            </Routes>
+          </Layout>
+        </BrowserRouter>
+      </ToastProvider>
     </QueryClientProvider>
   </StrictMode>,
 )
