@@ -36,7 +36,15 @@ export interface DashboardResponse {
   status_order: string[]
   breakdown: { platform: string; total: number; responded: number }[]
   reminders: Application[]
+  reminders_total: number
   filter_options: FilterOptions
+}
+
+export interface ReminderPageResponse {
+  items: Application[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface DashboardFilters {
@@ -67,6 +75,11 @@ export function getDashboard(filters: DashboardFilters): Promise<DashboardRespon
   return request(`/api/dashboard${query ? `?${query}` : ''}`)
 }
 
+export function getReminders(page: number, pageSize = 20): Promise<ReminderPageResponse> {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return request(`/api/reminders?${params.toString()}`)
+}
+
 export function getApplicationDetail(
   id: number
 ): Promise<{ application: Application; timeline: StatusEvent[] }> {
@@ -92,4 +105,15 @@ export function patchFields(
 
 export function postReprocess(id: number): Promise<Application> {
   return request(`/api/applications/${id}/reprocess`, { method: 'POST' })
+}
+
+export interface SourceEmail {
+  subject: string
+  sender: string
+  date: string
+  body: string
+}
+
+export function getSourceEmail(eventId: number): Promise<SourceEmail> {
+  return request(`/api/status-events/${eventId}/email`)
 }

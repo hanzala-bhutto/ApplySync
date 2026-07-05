@@ -417,6 +417,56 @@ scripts/gmail_probe.py
       semantic issues but is not a substitute for an actual screen-reader
       pass (NVDA/VoiceOver) on the live app - not done yet, not chased
       further without a concrete reported issue.
+- [x] Frontend polish pass (user-reported, post-4/4b): fixed the leftover
+      Vite scaffold favicon/title (`frontend/index.html` still said
+      "frontend", `public/favicon.svg` was still the default Vite logo -
+      replaced with an ApplySync-branded icon and title). Lightened dark
+      mode: the whole neutral/status color scale was one step darker than
+      needed (page bg `slate-950`, cards `slate-900`, borders `slate-800`),
+      shifted every dark-mode shade up one step across `Layout.tsx`,
+      `Dashboard.tsx`, `ApplicationDetail.tsx`, `ConfirmDialog.tsx`,
+      `status.ts`, `toast.tsx` - light mode untouched. Fixed follow-up
+      reminders not scaling: `repository.stale_applications` had no limit or
+      ordering and the dashboard rendered every stale application in one
+      unbounded grid, which would not hold up at 1000+ rows. Dashboard now
+      shows a bounded preview (`REMINDERS_PREVIEW_SIZE = 6`, oldest-first)
+      with a "View all N" link; a new dedicated `/reminders` page + `GET
+      /api/reminders` endpoint does real DB-level pagination
+      (`repository.stale_applications_page`/`stale_applications_count`,
+      `offset`/`limit` in SQL, not in-memory slicing) so it stays cheap
+      regardless of how many rows are stale. Split the platform
+      response-rate breakdown out of the dashboard into its own `/analytics`
+      page for separation of concerns, added a nav bar to `Layout.tsx`
+      (Dashboard / Follow-Up / Analytics). Renamed vague headings for
+      clarity: "Pipeline" -> "Application Pipeline", "Follow-up reminders"
+      -> "Needs Follow-Up", "By platform" -> "Response Rate by Platform".
+- [x] Source email verification (user-reported follow-up to the polish
+      pass): the application detail page had no way to see the email an
+      extraction actually came from, only the LLM's output - no direct way
+      for a human to verify the pipeline got it right. Added
+      `GmailClient.get_message(message_id)` (refactored out of
+      `reprocess_application`'s inline fetch, now shared) and `GET
+      /api/status-events/{event_id}/email` (looks up the event's
+      `source_email_id`, live-fetches from Gmail, returns
+      subject/sender/date/body - nothing new stored in the DB, this is a
+      read-through, same pattern as reprocess). Each Timeline row on the
+      detail page got a "View email" toggle (only shown when the event has
+      a `source_email_id`; manual corrections show "manual" instead) that
+      expands an inline panel: truncated to 500 chars by default with a
+      "Show full email" toggle, so a human can check the extraction against
+      the real source without leaving the page.
+- [x] Added a `declined` status (user-reported, e.g. Tekscend Photomask
+      Germany GmbH - an offer/interview the user turned down themselves,
+      distinct from `rejected` which means the company said no). Manual-only
+      by design: added to `repo.STATUS_ORDER` (backend Kanban column order)
+      and `STATUS_STYLES` (frontend, orange to stay visually distinct from
+      `rejected`'s rose and `other`'s amber), but deliberately NOT added to
+      the LLM's status `Literal` in `pipeline/state.py` - declining is the
+      user's own action, never something stated in an inbound email, so the
+      classifier should never be able to produce it. Set via the status
+      dropdown or drag-and-drop like any other manual correction
+      (`set_manual_status` already accepted arbitrary strings, no backend
+      validation to loosen).
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 

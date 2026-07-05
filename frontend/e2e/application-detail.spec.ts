@@ -66,6 +66,16 @@ test('reprocess confirm dialog can be cancelled without side effects', async ({ 
   await expect(page.getByRole('dialog')).toBeHidden()
 })
 
+test('timeline row reveals the original source email for verification', async ({ page }) => {
+  await page.goto('/applications/1')
+  await page.getByRole('button', { name: 'View email' }).click()
+  await expect(page.getByText('noreply@acme.example')).toBeVisible()
+  await expect(page.getByText(/Thanks for applying to the Senior Backend Engineer role/)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Hide email' }).click()
+  await expect(page.getByText('noreply@acme.example')).toBeHidden()
+})
+
 test('detail page has no detectable accessibility violations', async ({ page }) => {
   await page.goto('/applications/1')
   await expect(page.getByRole('heading', { name: 'Acme Corp' })).toBeVisible()

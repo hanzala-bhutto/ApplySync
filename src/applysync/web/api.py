@@ -39,7 +39,25 @@ class DashboardResponse(BaseModel):
     status_order: list[str]
     breakdown: list[PlatformBreakdownRow]
     reminders: list[Application]
+    reminders_total: int
     filter_options: FilterOptionsResponse
+
+
+class ReminderPageResponse(BaseModel):
+    items: list[Application]
+    total: int
+    page: int
+    page_size: int
+
+
+class SourceEmailResponse(BaseModel):
+    subject: str
+    sender: str
+    date: str
+    body: str
+
+
+REMINDERS_PREVIEW_SIZE = 6
 
 
 class ApplicationDetailResponse(BaseModel):
@@ -74,9 +92,25 @@ def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) ->
             "board": repo.applications_by_status(applications),
             "status_order": repo.STATUS_ORDER,
             "breakdown": repo.platform_breakdown(applications),
-            "reminders": reminders,
+            "reminders": reminders[:REMINDERS_PREVIEW_SIZE],
+            "reminders_total": len(reminders),
             "filter_options": repo.filter_options(session),
         }
+
+    @router.get(
+        "/reminders",
+        response_model=ReminderPageResponse,
+        summary="Paginated list of applications needing follow-up (no filters, DB-paginated for scale)",
+    )
+    def get_reminders(
+        session: Session = Depends(get_session),
+        page: int = 1,
+        page_size: int = 20,
+    ):
+        offset = (page - 1) * page_size
+        items = repo.stale_applications_page(session, offset=offset, limit=page_size)
+        total = repo.stale_applications_count(session)
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     @router.get(
         "/applications/{application_id}",
@@ -92,6 +126,23 @@ def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) ->
             "application": application,
             "timeline": repo.application_timeline(session, application_id),
         }
+
+    @router.get(
+        "/status-events/{event_id}/email",
+        response_model=SourceEmailResponse,
+        summary="Fetch the original Gmail message behind a status event, for human verification against the extracted fields",
+        responses={404: {"description": "Status event not found, or it has no source email (a manual correction)"}},
+    )
+    def get_status_event_email(
+        event_id: int,
+        session: Session = Depends(get_session),
+        gmail_client: GmailClient = Depends(get_gmail_client),
+    ):
+        event = repo.get_status_event(session, event_id)
+        if event is None or event.source_email_id is None:
+            raise HTTPException(status_code=404, detail="No source email for this event")
+        email = gmail_client.get_message(event.source_email_id)
+        return {"subject": email.subject, "sender": email.sender, "date": email.date, "body": email.body}
 
     @router.patch(
         "/applications/{application_id}/status",

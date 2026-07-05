@@ -3,10 +3,12 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getApplicationDetail,
+  getSourceEmail,
   patchFields,
   patchStatus,
   postReprocess,
   type Application,
+  type StatusEvent,
 } from '../lib/api'
 import { avatarFor } from '../lib/avatar'
 import { statusStyle, STATUS_STYLES } from '../lib/status'
@@ -93,7 +95,7 @@ export function ApplicationDetail() {
         </Link>
       </p>
 
-      <section className="mb-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <section className="mb-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">
             <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${av.bg} text-base font-bold text-white`}>
@@ -116,7 +118,7 @@ export function ApplicationDetail() {
               value={application.current_status}
               disabled={statusMutation.isPending}
               onChange={(e) => statusMutation.mutate(e.target.value)}
-              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs capitalize focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs capitalize focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-700"
             >
               {Object.keys(STATUS_STYLES).map((s) => (
                 <option key={s} value={s}>{s}</option>
@@ -148,12 +150,12 @@ export function ApplicationDetail() {
           )}
         </dl>
 
-        <div className="flex gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
+        <div className="flex gap-2 border-t border-slate-100 pt-4 dark:border-slate-700">
           <button
             type="button"
             onClick={() => setEditing((v) => !v)}
             aria-expanded={editing}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700"
           >
             {editing ? 'Cancel edit' : 'Edit'}
           </button>
@@ -161,7 +163,7 @@ export function ApplicationDetail() {
             type="button"
             onClick={() => setConfirmReprocess(true)}
             disabled={reprocessMutation.isPending}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:hover:bg-slate-700"
           >
             {reprocessMutation.isPending ? 'Reprocessing...' : 'Reprocess from email'}
           </button>
@@ -172,22 +174,19 @@ export function ApplicationDetail() {
 
       <section>
         <h2 className="mb-3 text-sm font-semibold text-slate-500 dark:text-slate-400">Timeline</h2>
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-400">
               <tr>
                 <th className="px-4 py-2">Date</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2">Notes</th>
+                <th className="px-4 py-2">Source</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
               {timeline.map((event) => (
-                <tr key={event.id}>
-                  <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{event.event_date}</td>
-                  <td className="px-4 py-2 capitalize">{event.status}</td>
-                  <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{event.notes ?? ''}</td>
-                </tr>
+                <TimelineRow key={event.id} event={event} />
               ))}
             </tbody>
           </table>
@@ -224,7 +223,7 @@ function EditForm({
 
   return (
     <form
-      className="mt-4 space-y-3 border-t border-slate-100 pt-4 dark:border-slate-800"
+      className="mt-4 space-y-3 border-t border-slate-100 pt-4 dark:border-slate-700"
       onSubmit={(e) => {
         e.preventDefault()
         onSave({ company_name: companyName, job_title: jobTitle, platform })
@@ -237,7 +236,7 @@ function EditForm({
           value={companyName}
           onChange={(e) => setCompanyName(e.target.value)}
           required
-          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
+          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-700"
         />
       </div>
       <div>
@@ -247,7 +246,7 @@ function EditForm({
           value={jobTitle}
           onChange={(e) => setJobTitle(e.target.value)}
           required
-          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
+          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-700"
         />
       </div>
       <div>
@@ -257,7 +256,7 @@ function EditForm({
           value={platform}
           onChange={(e) => setPlatform(e.target.value)}
           required
-          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
+          className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-600 dark:bg-slate-700"
         />
       </div>
       <button
@@ -268,5 +267,83 @@ function EditForm({
         {saving ? 'Saving...' : 'Save'}
       </button>
     </form>
+  )
+}
+
+const EMAIL_PREVIEW_CHARS = 500
+
+function TimelineRow({ event }: { event: StatusEvent }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <>
+      <tr>
+        <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{event.event_date}</td>
+        <td className="px-4 py-2 capitalize">{event.status}</td>
+        <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{event.notes ?? ''}</td>
+        <td className="px-4 py-2">
+          {event.source_email_id ? (
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+            >
+              {open ? 'Hide email' : 'View email'}
+            </button>
+          ) : (
+            <span className="text-xs text-slate-400 dark:text-slate-500">manual</span>
+          )}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={4} className="border-t border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-700/30">
+            <SourceEmailPanel eventId={event.id} />
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function SourceEmailPanel({ eventId }: { eventId: number }) {
+  const [showFull, setShowFull] = useState(false)
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['source-email', eventId],
+    queryFn: () => getSourceEmail(eventId),
+    staleTime: Infinity,
+  })
+
+  if (isLoading) {
+    return <p className="text-xs text-slate-500 dark:text-slate-400" role="status">Loading original email...</p>
+  }
+  if (isError || !data) {
+    return <p className="text-xs text-rose-500" role="alert">Could not load the original email.</p>
+  }
+
+  const truncated = data.body.length > EMAIL_PREVIEW_CHARS && !showFull
+  const bodyToShow = truncated ? `${data.body.slice(0, EMAIL_PREVIEW_CHARS)}…` : data.body
+
+  return (
+    <div className="text-sm">
+      <dl className="mb-2 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-3">
+        <div><dt className="text-xs text-slate-500 dark:text-slate-400">From</dt><dd className="truncate">{data.sender}</dd></div>
+        <div><dt className="text-xs text-slate-500 dark:text-slate-400">Date</dt><dd className="truncate">{data.date}</dd></div>
+        <div><dt className="text-xs text-slate-500 dark:text-slate-400">Subject</dt><dd className="truncate">{data.subject}</dd></div>
+      </dl>
+      <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+        {bodyToShow}
+      </pre>
+      {data.body.length > EMAIL_PREVIEW_CHARS && (
+        <button
+          type="button"
+          onClick={() => setShowFull((v) => !v)}
+          className="mt-1.5 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+        >
+          {showFull ? 'Show less' : 'Show full email'}
+        </button>
+      )}
+    </div>
   )
 }
