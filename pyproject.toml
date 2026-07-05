@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-settings>=2.4",
     "langchain>=0.3",
     "langchain-community>=0.3",
+    "langchain-nvidia-ai-endpoints>=0.3",
     "langgraph>=0.2",
     "langgraph-checkpoint-sqlite>=2.0",
     "sqlmodel>=0.0.22",
