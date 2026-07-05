@@ -67,7 +67,8 @@ def test_dashboard_loads_with_no_applications(client):
     response = client.get("/")
     assert response.status_code == 200
     assert "ApplySync" in response.text
-    assert "Nothing stale right now" in response.text
+    assert "Pipeline" in response.text
+    assert "Follow-up reminders" not in response.text
 
 
 def test_dashboard_shows_application_in_its_status_column(client):
@@ -148,7 +149,7 @@ def test_dashboard_shows_stale_application_as_reminder(client):
     response = client.get("/")
 
     assert "OldCo" in response.text
-    assert "Nothing stale right now" not in response.text
+    assert "Follow-up reminders" in response.text
 
 
 def test_application_detail_shows_timeline(client):

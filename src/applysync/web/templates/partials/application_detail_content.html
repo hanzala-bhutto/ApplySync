@@ -1,28 +1,32 @@
 {% set style = status_styles.get(application.current_status, status_styles["other"]) %}
+{% set av = application.company_name | avatar %}
 <div id="application-detail">
-  <section class="mb-8 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-    <div class="mb-4 flex items-start justify-between">
-      <div>
-        <h2 class="text-lg font-semibold">{{ application.company_name }}</h2>
-        <p class="text-sm text-slate-500 dark:text-slate-400">{{ application.job_title }}</p>
+  <section class="mb-8 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div class="mb-4 flex items-start justify-between gap-3">
+      <div class="flex items-start gap-3">
+        <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full {{ av.bg }} text-base font-bold text-white">{{ av.initial }}</span>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight">{{ application.company_name }}</h1>
+          <p class="text-sm text-slate-500 dark:text-slate-400">{{ application.job_title }}</p>
+        </div>
       </div>
-      <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium capitalize {{ style.bg }} {{ style.text }}">
+      <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium capitalize {{ style.bg }} {{ style.text }}">
         <span class="h-1.5 w-1.5 rounded-full {{ style.dot }}"></span>
         {{ application.current_status }}
       </span>
     </div>
 
     <dl class="mb-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-      <div><dt class="text-slate-400 dark:text-slate-500">Platform</dt><dd>{{ application.platform }}</dd></div>
+      <div><dt class="text-slate-400 dark:text-slate-500">Platform</dt><dd class="capitalize">{{ application.platform }}</dd></div>
       <div><dt class="text-slate-400 dark:text-slate-500">Applied</dt><dd>{{ application.applied_date }}</dd></div>
       {% if application.location %}<div><dt class="text-slate-400 dark:text-slate-500">Location</dt><dd>{{ application.location }}</dd></div>{% endif %}
       {% if application.salary_text %}<div><dt class="text-slate-400 dark:text-slate-500">Salary</dt><dd>{{ application.salary_text }}</dd></div>{% endif %}
-      {% if application.job_url %}<div><dt class="text-slate-400 dark:text-slate-500">Posting</dt><dd><a class="text-brand-600 hover:underline dark:text-brand-500" href="{{ application.job_url }}">Link</a></dd></div>{% endif %}
+      {% if application.job_url %}<div><dt class="text-slate-400 dark:text-slate-500">Posting</dt><dd><a class="text-brand-600 hover:underline dark:text-brand-400" href="{{ application.job_url }}">Link</a></dd></div>{% endif %}
     </dl>
 
     <div class="flex gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
       <button type="button" onclick="document.getElementById('edit-form-{{ application.id }}').classList.toggle('hidden')"
-              class="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+              class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
         Edit
       </button>
       <button type="button"
@@ -30,7 +34,7 @@
               hx-target="#application-detail"
               hx-swap="outerHTML"
               hx-confirm="Re-run extraction on the original email? This overwrites the fields below with a fresh extraction."
-              class="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
+              class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
         Reprocess from email
       </button>
     </div>
@@ -42,23 +46,23 @@
           hx-swap="outerHTML">
       <div>
         <label class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Company</label>
-        <input name="company_name" value="{{ application.company_name }}" class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800" required>
+        <input name="company_name" value="{{ application.company_name }}" class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800" required>
       </div>
       <div>
         <label class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Job title</label>
-        <input name="job_title" value="{{ application.job_title }}" class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800" required>
+        <input name="job_title" value="{{ application.job_title }}" class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800" required>
       </div>
       <div>
         <label class="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Platform</label>
-        <input name="platform" value="{{ application.platform }}" class="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-800" required>
+        <input name="platform" value="{{ application.platform }}" class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800" required>
       </div>
-      <button type="submit" class="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700">Save</button>
+      <button type="submit" class="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700">Save</button>
     </form>
   </section>
 
   <section>
-    <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Timeline</h2>
-    <div class="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+    <h2 class="mb-3 text-sm font-semibold text-slate-500 dark:text-slate-400">Timeline</h2>
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <table class="w-full text-sm">
         <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-400 dark:bg-slate-800/50 dark:text-slate-500">
           <tr><th class="px-4 py-2">Date</th><th class="px-4 py-2">Status</th><th class="px-4 py-2">Notes</th></tr>
