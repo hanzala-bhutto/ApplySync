@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +22,19 @@ class Settings(BaseSettings):
     gmail_token_path: Path = Path(".secrets/token.json")
     db_path: Path = Path("applysync.db")
     sync_interval_minutes: int = 20
+
+    # Relative paths in .env (the default for all three above) must resolve
+    # against the project root, not whatever directory the process happens
+    # to be started from - confirmed as a real bug: the Gmail OAuth web flow
+    # (unlike the CLI, always run from repo root by convention) hit "No
+    # Gmail client secrets file found" because uvicorn's cwd wasn't the repo
+    # root, even though .secrets/credentials.json existed there.
+    @field_validator("gmail_client_secrets_path", "gmail_token_path", "db_path", mode="after")
+    @classmethod
+    def _resolve_against_project_root(cls, value: Path) -> Path:
+        if value.is_absolute():
+            return value
+        return PROJECT_ROOT / value
 
 
 class PlatformSource(BaseModel):

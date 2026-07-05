@@ -307,6 +307,37 @@ scripts/gmail_probe.py
       `?gmail=connected`/`?gmail=error` redirect back with a toast + URL
       cleanup. `/gmail-setup` skill updated to document both paths (CLI
       first-run still works for `scripts/gmail_probe.py`).
+
+      Three real bugs found testing the actual flow (not caught by the
+      mocked backend tests, since those never exercise a real token
+      exchange or a real cross-origin redirect):
+      (1) `Settings.gmail_client_secrets_path`/`gmail_token_path`/`db_path`
+      were relative paths resolved against whatever directory the process
+      happened to be started from, not the repo root - harmless for the CLI
+      (always run from repo root by convention) but `/api/gmail/connect`
+      returned 500 "No Gmail client secrets file found" because the running
+      server's cwd wasn't the repo root even though the file existed there.
+      Fixed with a `field_validator` in `config.py` that resolves relative
+      paths against `PROJECT_ROOT`. (2) `invalid_grant: Missing code
+      verifier` from Google on the callback - `google-auth-oauthlib`
+      defaults `autogenerate_code_verifier=True`, so the `/connect` route's
+      `Flow` instance generates a PKCE `code_verifier` and sends its
+      `code_challenge` to Google, but `/callback` built a *separate* `Flow`
+      instance (different HTTP request, no shared state) with no verifier,
+      so `fetch_token()` sent none. Fixed by storing `flow.code_verifier`
+      alongside `return_to` in `_pending_states` (keyed by OAuth `state`)
+      and passing it into the callback's `Flow.from_client_secrets_file(...,
+      code_verifier=...)`. (3) `GmailConnectionBanner` built `return_to` as
+      just `window.location.pathname + search` (e.g. `/`), a relative path -
+      when the backend's callback issued `RedirectResponse(return_to +
+      "?gmail=connected")`, the browser resolved that relative URL against
+      the BACKEND's own origin (it's the origin the redirect response came
+      from), not the frontend's, landing on
+      `http://127.0.0.1:8001/?gmail=connected` (404, no such backend route)
+      instead of back on the Vite dev server. Fixed by including
+      `window.location.origin` in `return_to`, so it's always an absolute
+      URL; the Playwright test for the banner now asserts `return_to` starts
+      with `http(s)://` to catch this class of regression.
 - [x] Perf + accuracy pass (post-M3, triggered by the user's real 238-application
       inbox only showing ~7-8 applications): fixed Gmail pagination (was
       silently capped at 50 emails ever), merged classify+extract into one

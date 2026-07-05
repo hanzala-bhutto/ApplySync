@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from google.oauth2.credentials import Credentials
@@ -11,11 +13,24 @@ from applysync.gmail.client import SCOPES
 
 router = APIRouter(prefix="/api/gmail", tags=["gmail-oauth"])
 
-# state -> return_to URL. In-memory and single-process is fine here: this is
-# a personal, single-user local tool (one FastAPI process, no multi-worker
-# deployment), and a state entry only needs to survive the few seconds
-# between redirecting to Google and Google redirecting back.
-_pending_states: dict[str, str] = {}
+
+@dataclass
+class _PendingAuth:
+    return_to: str
+    # google-auth-oauthlib defaults to autogenerate_code_verifier=True, so
+    # the /connect Flow instance generates a PKCE code_verifier and sends its
+    # code_challenge to Google. /callback builds a brand-new Flow instance
+    # (separate HTTP request, no shared state) - without carrying this same
+    # verifier over, fetch_token() sends none, and Google rejects the
+    # exchange with "invalid_grant: Missing code verifier".
+    code_verifier: str
+
+
+# state -> pending auth details. In-memory and single-process is fine here:
+# this is a personal, single-user local tool (one FastAPI process, no
+# multi-worker deployment), and an entry only needs to survive the few
+# seconds between redirecting to Google and Google redirecting back.
+_pending_states: dict[str, _PendingAuth] = {}
 
 
 class GmailStatusResponse(BaseModel):
@@ -72,7 +87,7 @@ def register_gmail_oauth_routes(app, *, get_settings) -> None:
         auth_url, state = flow.authorization_url(
             access_type="offline", include_granted_scopes="true", prompt="consent"
         )
-        _pending_states[state] = return_to
+        _pending_states[state] = _PendingAuth(return_to=return_to, code_verifier=flow.code_verifier)
         return RedirectResponse(auth_url)
 
     @router.get(
@@ -88,14 +103,18 @@ def register_gmail_oauth_routes(app, *, get_settings) -> None:
     ):
         if state not in _pending_states:
             raise HTTPException(status_code=400, detail="Unknown or expired OAuth state, please try connecting again")
-        return_to = _pending_states.pop(state)
+        pending = _pending_states.pop(state)
+        return_to = pending.return_to
         separator = "&" if "?" in return_to else "?"
 
         if error:
             return RedirectResponse(f"{return_to}{separator}gmail=error")
 
         flow = Flow.from_client_secrets_file(
-            str(settings.gmail_client_secrets_path), scopes=SCOPES, redirect_uri=_redirect_uri(request)
+            str(settings.gmail_client_secrets_path),
+            scopes=SCOPES,
+            redirect_uri=_redirect_uri(request),
+            code_verifier=pending.code_verifier,
         )
         flow.fetch_token(code=code)
 

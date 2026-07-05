@@ -53,7 +53,7 @@ export function GmailConnectionBanner() {
           Gmail isn't connected yet - syncing applications needs access to your inbox.
         </span>
         <a
-          href={gmailConnectUrl(window.location.pathname + window.location.search)}
+          href={gmailConnectUrl(window.location.origin + window.location.pathname + window.location.search)}
           className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700"
         >
           Connect Gmail

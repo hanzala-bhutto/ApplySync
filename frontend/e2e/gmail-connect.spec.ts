@@ -17,5 +17,12 @@ test('connection banner prompts to connect when Gmail is not connected', async (
 
   const connectLink = page.getByRole('link', { name: 'Connect Gmail' })
   await expect(connectLink).toBeVisible()
-  await expect(connectLink).toHaveAttribute('href', /\/api\/gmail\/connect\?return_to=/)
+  const href = await connectLink.getAttribute('href')
+  const returnTo = new URL(href!).searchParams.get('return_to')
+  // Regression check: return_to must be an absolute URL (with the
+  // frontend's own origin). A relative path here means the backend's
+  // eventual RedirectResponse resolves against the BACKEND's origin, not
+  // the frontend's, sending the user to e.g. http://127.0.0.1:8001/?gmail=
+  // connected (a 404) instead of back to the dashboard.
+  expect(returnTo).toMatch(/^https?:\/\//)
 })
