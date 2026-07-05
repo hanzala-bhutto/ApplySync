@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from langgraph.graph import END, StateGraph
@@ -10,7 +11,8 @@ from sqlmodel import Session
 from applysync.config import Settings, SourcesConfig, get_settings, get_sources
 from applysync.db import repository as repo
 from applysync.db.init_db import get_engine, init_db
-from applysync.gmail.client import GmailClient
+from applysync.db.models import Application
+from applysync.gmail.client import GmailClient, parse_message
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import build_search_query
 from applysync.llm import get_chat_model
@@ -157,3 +159,57 @@ def run_sync(settings: Settings | None = None) -> dict:
 
         repo.finish_pipeline_run(session, run_id, **stats)
         return {"run_id": run_id, **stats}
+
+
+def reprocess_application(
+    session: Session,
+    application_id: int,
+    *,
+    gmail_client: GmailClient,
+    model,
+) -> Application | None:
+    """Dashboard "reprocess" action: refetches the email behind the most
+    recent status event and re-runs extraction only (not the full graph -
+    match_existing_application isn't relevant here, we already know which
+    application this is), then updates its fields/status in place.
+
+    Returns None if there's nothing to reprocess: unknown application, no
+    events yet, or the most recent event was itself a manual correction
+    (source_email_id is None, so there's no email to refetch).
+    """
+    application = repo.get_application(session, application_id)
+    if application is None:
+        return None
+
+    timeline = repo.application_timeline(session, application_id)
+    if not timeline or timeline[-1].source_email_id is None:
+        return application
+
+    message_id = timeline[-1].source_email_id
+    raw_message = (
+        gmail_client.service.users().messages().get(userId="me", id=message_id, format="full").execute()
+    )
+    email = parse_message(raw_message)
+
+    extract_node = make_extract_node(model)
+    result = extract_node({"email": email, "platform_hint": application.platform})
+    extracted = result.get("extracted")
+    if extracted is None:
+        return application
+
+    repo.update_application_fields(
+        session, application_id, company_name=extracted.company_name, job_title=extracted.job_title
+    )
+    if extracted.status != application.current_status:
+        repo.add_status_event(
+            session,
+            application_id=application_id,
+            status=extracted.status,
+            event_date=datetime.now(timezone.utc).replace(tzinfo=None),
+            source_email_id=message_id,
+            raw_extract_json=extracted.model_dump_json(),
+            notes="Reprocessed from the dashboard",
+        )
+
+    session.refresh(application)
+    return application

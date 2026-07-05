@@ -19,11 +19,12 @@ def sync() -> None:
 
 
 @app.command()
-def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Run the web dashboard."""
+def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> None:
+    """Run the web dashboard. Pass --reload during development to auto-
+    restart on code changes (off by default, matches normal use)."""
     import uvicorn
 
-    uvicorn.run("applysync.web.app:app", host=host, port=port, reload=False)
+    uvicorn.run("applysync.web.app:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

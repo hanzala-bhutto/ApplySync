@@ -35,7 +35,10 @@ class StatusEvent(SQLModel, table=True):
     application_id: int = Field(foreign_key="application.id")
     status: str
     event_date: datetime
-    source_email_id: str
+    # Nullable: manual corrections made from the dashboard (drag-and-drop,
+    # inline edit) are status events too, but they don't originate from an
+    # email.
+    source_email_id: str | None = None
     raw_extract_json: str | None = None
     notes: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
