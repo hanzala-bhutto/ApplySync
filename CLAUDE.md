@@ -117,8 +117,12 @@ scripts/gmail_probe.py
 ## Milestones (update status here as they land)
 
 - [x] M1a: Gmail OAuth client, query builder, message parsing (code done, tested)
-- [ ] M1b: Manual extraction spike, run `scripts/gmail_probe.py` against real
-      inbox after `/gmail-setup`, hand-verify 5-10 samples per platform
+- [x] M1b: Manual extraction spike, ran `scripts/gmail_probe.py` against the
+      real inbox (StepStone, Indeed, jackandjill.ai samples verified; no
+      LinkedIn sample seen yet, recheck when one exists). Found and fixed two
+      real bugs: HTML-only emails (jackandjill.ai) extracted as empty bodies
+      (no text/plain part), and StepStone's Windows-1252 charset was being
+      force-decoded as UTF-8, mangling apostrophes/umlauts.
 - [ ] M2: LangGraph pipeline + SQLite persistence + idempotency
 - [ ] M3: Web dashboard (status board, timeline, by-platform, reminders).
       Include a "Connect Gmail" button using a web OAuth redirect flow
