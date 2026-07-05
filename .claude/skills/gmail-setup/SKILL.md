@@ -36,15 +36,34 @@ OAuth client, independent of any Claude Code session.
    `https://www.googleapis.com/auth/gmail.readonly`. If a consent screen ever
    asks for broader access than that, stop and check the code, that's a
    regression against the hard "readonly only" constraint in `CLAUDE.md`.
-6. **First run**: running the app's Gmail-connecting command (e.g.
-   `applysync sync` or `scripts/gmail_probe.py`) for the first time opens a
-   browser consent prompt. After granting, a `token.json` is cached (path per
-   `.env`/config) so subsequent runs don't re-prompt.
+6. **First run**: two ways to complete the actual consent, both use the same
+   `credentials.json` from step 3 (Desktop app client type works for both -
+   see the note below on why):
+   - **From the dashboard** (the normal path once the web app is running):
+     click "Connect Gmail" in the banner shown when no token is cached yet.
+     This redirects to Google's consent screen and back to a backend
+     callback route (`GET /api/gmail/callback`), which writes `token.json`
+     itself - no terminal involved.
+   - **From the CLI** (for `scripts/gmail_probe.py` or before the web app
+     exists): running the app's Gmail-connecting command (e.g. `applysync
+     sync`) for the first time opens a local browser consent prompt directly
+     (`InstalledAppFlow.run_local_server`).
+   Either path caches the same `token.json` (path per `.env`/config), so
+   subsequent runs/requests don't re-prompt.
 7. **Token refresh**: the client library refreshes automatically using the
    cached refresh token. If auth errors resurface later, the usual fix is
-   deleting the cached `token.json` and re-running the first-run consent,
-   not regenerating `credentials.json` (that's only needed if the OAuth client
-   itself was deleted/rotated in Cloud Console).
+   deleting the cached `token.json` and re-running the first-run consent
+   (either path above), not regenerating `credentials.json` (that's only
+   needed if the OAuth client itself was deleted/rotated in Cloud Console).
+
+**Why the dashboard flow doesn't need a separate "Web application" OAuth
+client**: Google's "Desktop app" client type accepts any `http://localhost`
+or `http://127.0.0.1` redirect URI regardless of the exact one on file (RFC
+8252 loopback redirection) - the same mechanism `run_local_server(port=0)`
+relies on. The backend's `/api/gmail/connect` route builds its own
+`redirect_uri` from the request it's serving (e.g.
+`http://127.0.0.1:8000/api/gmail/callback`), so the existing
+`credentials.json` works unchanged for both flows.
 
 ## Troubleshooting
 

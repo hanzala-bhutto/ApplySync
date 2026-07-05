@@ -60,6 +60,13 @@ export async function mockApi(page: Page) {
     await route.fulfill({ json: dashboard })
   })
 
+  // Connected by default so the Gmail connection banner doesn't show up and
+  // interfere with unrelated tests/layout/a11y checks. Tests that care about
+  // the disconnected state override this route themselves.
+  await page.route('**/api/gmail/status*', async (route) => {
+    await route.fulfill({ json: { connected: true } })
+  })
+
   await page.route('**/api/reminders*', async (route) => {
     await route.fulfill({
       json: { items: dashboard.reminders, total: dashboard.reminders_total, page: 1, page_size: 20 },
