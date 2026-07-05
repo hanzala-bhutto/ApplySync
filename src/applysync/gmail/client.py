@@ -126,6 +126,14 @@ class GmailClient:
             self._service = build("gmail", "v1", credentials=creds)
         return self._service
 
+    def get_message(self, message_id: str) -> RawEmail:
+        """Fetch and parse a single message by id, e.g. to refetch the email
+        behind a stored `source_email_id` (reprocessing, showing the source
+        email for human verification).
+        """
+        raw_message = self.service.users().messages().get(userId="me", id=message_id, format="full").execute()
+        return parse_message(raw_message)
+
     def fetch_messages(self, query: str, max_results: int = 500) -> list[RawEmail]:
         """max_results is a total cap across ALL pages, not a per-page size
         (Gmail's list API caps each page at 100 regardless). Gmail's list

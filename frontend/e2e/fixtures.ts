@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
 
-export const STATUS_ORDER = ['applied', 'viewed', 'assessment', 'interview', 'offer', 'rejected', 'other']
+export const STATUS_ORDER = ['applied', 'viewed', 'assessment', 'interview', 'offer', 'declined', 'rejected', 'other']
 
 export function makeApplication(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -42,6 +42,7 @@ export function dashboardResponse() {
       { platform: 'other', total: 1, responded: 1 },
     ],
     reminders: [apps[0]],
+    reminders_total: 1,
     filter_options: {
       years: [2025, 2026],
       platforms: ['linkedin', 'other'],
@@ -59,6 +60,12 @@ export async function mockApi(page: Page) {
     await route.fulfill({ json: dashboard })
   })
 
+  await page.route('**/api/reminders*', async (route) => {
+    await route.fulfill({
+      json: { items: dashboard.reminders, total: dashboard.reminders_total, page: 1, page_size: 20 },
+    })
+  })
+
   await page.route('**/api/applications/*/status', async (route) => {
     const body = route.request().postDataJSON() as { status: string }
     await route.fulfill({ json: makeApplication({ current_status: body.status }) })
@@ -66,6 +73,17 @@ export async function mockApi(page: Page) {
 
   await page.route('**/api/applications/*/reprocess', async (route) => {
     await route.fulfill({ json: makeApplication({ job_title: 'Re-extracted Title' }) })
+  })
+
+  await page.route('**/api/status-events/*/email', async (route) => {
+    await route.fulfill({
+      json: {
+        subject: 'Your application to Acme Corp',
+        sender: 'noreply@acme.example',
+        date: 'Thu, 15 Jan 2026 10:00:00 +0000',
+        body: 'Thanks for applying to the Senior Backend Engineer role at Acme Corp. We will review your application and get back to you soon.',
+      },
+    })
   })
 
   await page.route('**/api/applications/*', async (route) => {

@@ -12,7 +12,7 @@ from applysync.config import Settings, SourcesConfig, get_settings, get_sources
 from applysync.db import repository as repo
 from applysync.db.init_db import get_engine, init_db
 from applysync.db.models import Application
-from applysync.gmail.client import GmailClient, parse_message
+from applysync.gmail.client import GmailClient
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import build_search_query
 from applysync.llm import get_chat_model
@@ -191,10 +191,7 @@ def reprocess_application(
         return application
 
     message_id = timeline[-1].source_email_id
-    raw_message = (
-        gmail_client.service.users().messages().get(userId="me", id=message_id, format="full").execute()
-    )
-    email = parse_message(raw_message)
+    email = gmail_client.get_message(message_id)
 
     classify_and_extract = make_classify_and_extract_node(model, get_sources())
     result = classify_and_extract({"email": email})

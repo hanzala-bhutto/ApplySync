@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from applysync.db.models import Application, PipelineRun, ProcessedEmail, StatusEvent
 
@@ -195,7 +195,7 @@ def delete_application(session: Session, application_id: int) -> bool:
     return True
 
 
-STATUS_ORDER = ["applied", "viewed", "assessment", "interview", "offer", "rejected", "other"]
+STATUS_ORDER = ["applied", "viewed", "assessment", "interview", "offer", "declined", "rejected", "other"]
 
 
 def filtered_applications(
@@ -271,15 +271,56 @@ def application_timeline(session: Session, application_id: int) -> list[StatusEv
     return list(session.exec(statement).all())
 
 
+def get_status_event(session: Session, event_id: int) -> StatusEvent | None:
+    return session.get(StatusEvent, event_id)
+
+
 def stale_applications(session: Session, *, days: int = 14) -> list[Application]:
     """Applications still in 'applied' status with no update in `days` days,
     used for the dashboard's follow-up reminders (a reporting query, not a
-    pipeline node).
+    pipeline node). Ordered oldest-first (most overdue) so callers that slice
+    a preview (e.g. the dashboard) get the most urgent ones, not an arbitrary
+    subset.
     """
     cutoff = date.today() - timedelta(days=days)
-    statement = select(Application).where(
+    statement = (
+        select(Application)
+        .where(
+            Application.current_status == "applied",
+            Application.applied_date < cutoff,
+        )
+        .order_by(Application.applied_date.asc())
+    )
+    return list(session.exec(statement).all())
+
+
+def stale_applications_count(session: Session, *, days: int = 14) -> int:
+    """Total count behind `stale_applications_page`, for pagination controls."""
+    cutoff = date.today() - timedelta(days=days)
+    statement = select(func.count()).select_from(Application).where(
         Application.current_status == "applied",
         Application.applied_date < cutoff,
+    )
+    return session.exec(statement).one()
+
+
+def stale_applications_page(
+    session: Session, *, days: int = 14, offset: int = 0, limit: int = 20
+) -> list[Application]:
+    """DB-paginated version of `stale_applications`, for the dedicated
+    Reminders page - unlike the dashboard's bounded preview, this needs to
+    stay cheap even with thousands of stale rows.
+    """
+    cutoff = date.today() - timedelta(days=days)
+    statement = (
+        select(Application)
+        .where(
+            Application.current_status == "applied",
+            Application.applied_date < cutoff,
+        )
+        .order_by(Application.applied_date.asc())
+        .offset(offset)
+        .limit(limit)
     )
     return list(session.exec(statement).all())
 

@@ -53,3 +53,9 @@ class FakeGmailService:
 class FakeGmailClient:
     def __init__(self, raw_message: dict):
         self.service = FakeGmailService(raw_message)
+        self._raw_message = raw_message
+
+    def get_message(self, message_id: str):
+        from applysync.gmail.client import parse_message
+
+        return parse_message(self._raw_message)

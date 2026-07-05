@@ -32,7 +32,7 @@ export function ConfirmDialog({ open, title, description, confirmLabel = 'Confir
       // viewport. Native <dialog> normally centers itself via a default
       // `margin: auto`, but Tailwind's preflight reset zeroes margins on
       // every element, which silently breaks that and pins it to the top.
-      className="fixed inset-0 m-auto w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 shadow-xl backdrop:bg-slate-900/40 dark:border-slate-800 dark:bg-slate-900"
+      className="fixed inset-0 m-auto w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 shadow-xl backdrop:bg-slate-900/40 dark:border-slate-700 dark:bg-slate-800"
     >
       <h2 className="mb-1.5 text-base font-semibold">{title}</h2>
       <p className="mb-4 text-sm text-slate-500 dark:text-slate-400">{description}</p>
@@ -40,7 +40,7 @@ export function ConfirmDialog({ open, title, description, confirmLabel = 'Confir
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+          className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700"
         >
           Cancel
         </button>
