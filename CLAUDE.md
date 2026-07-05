@@ -117,10 +117,23 @@ is crash-recovery only.
    placeholders ("Not specified" / "Unknown") on two separate runs, which
    silently created two application rows instead of deduping to one.
 3. `match_existing_application`: new vs. update-existing vs. duplicate.
-   Currently heuristic-only (exact company+title+platform match via
-   `repository.find_matching_application`); an LLM fallback for ambiguous
-   near-duplicates is not yet implemented, worth adding if the exact-match
-   heuristic proves too strict in practice.
+   Heuristic match via `repository.find_matching_application`: company+title+
+   platform, normalized (lowercase, whitespace, legal suffixes like SE/GmbH/
+   Inc/Ltd/AG/Co/LLC/Corp stripped) so e.g. "EGYM" and "EGYM SE" from two
+   emails for the same application still match. Found necessary after a real
+   pair of EGYM confirmation emails extracted with different suffixes
+   created two application rows instead of one; normalization is for
+   matching only, original casing is still stored/displayed.
+   **Known remaining gap**: a missing job_title vs. a genuinely different
+   job_title are not the same kind of mismatch, but the heuristic can't tell
+   them apart (seen for real: two Nagarro applications, one with an actual
+   title and one where the title just wasn't extracted, correctly did NOT
+   dedupe, but it's unclear if that's actually right). Disambiguating that
+   needs real judgment (date proximity, an LLM asking "same application?"),
+   which is the LLM-fallback-for-ambiguous-matches idea from the original
+   design, still not implemented. Don't attempt a bigger fuzzy-matching
+   rewrite without a concrete case in hand; note more real examples here as
+   they show up.
 4. `upsert_db`: deterministic, no LLM. Always calls `mark_processed`
    regardless of new/update/duplicate_skip.
 5. `mark_irrelevant` / `mark_extraction_failed`: both just call
