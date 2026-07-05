@@ -51,6 +51,17 @@ each session.
   this session only.** The shipped application must implement its own Gmail
   API OAuth flow (`credentials.json` + cached `token.json`), never wire the
   app to depend on MCP tools at runtime.
+- **Don't background the backend or frontend dev servers via Claude Code's
+  own tools.** The user explicitly asked for this after a long session of
+  real, reproducible pain: backgrounded processes across many tool calls
+  left orphaned "ghost" listeners (visible in the OS network stack, holding
+  a port, but with no corresponding process - Windows-specific, seen
+  repeatedly on ports 8000 and 5173), causing hours of confusion debugging
+  what looked like app bugs but were actually stale processes serving old
+  code. Give the user the exact commands (`applysync serve --reload` /
+  `npm run dev` in `frontend/`) and let them run each in their own terminal.
+  A single one-off command to check something (curl, a quick TestClient
+  call, `npm run build`) is fine; a long-running dev server is not.
 
 ## Architecture
 
@@ -291,12 +302,32 @@ scripts/gmail_probe.py
 - [x] React migration 1/4: JSON API. `web/api.py` adds `/api/dashboard`,
       `/api/applications/{id}` (GET/PATCH), `/api/applications/{id}/status`
       (PATCH), `/api/applications/{id}/reprocess` (POST), reusing
-      repository.py/pipeline logic unchanged. CORS enabled for
-      `http://localhost:5173` (Vite default). Existing Jinja2 dashboard
-      still works unchanged, both run side by side during migration.
-- [ ] React migration 2/4: scaffold + read-only dashboard parity
+      repository.py/pipeline logic unchanged. CORS matched by regex
+      (`http://(localhost|127.0.0.1):\d+`), not a fixed port - Vite falls
+      back to the next free port whenever another project's dev server
+      already holds 5173, which happened for real during this build.
+      Existing Jinja2 dashboard still works unchanged, both run side by
+      side during migration.
+- [x] React migration 2/4: scaffold + read-only dashboard parity.
+      `frontend/`: Vite (pinned to v6 - the new default "rolldown-vite" v8
+      release has a broken native binding on this machine, a real,
+      reproducible build failure, not a hypothetical) + React + TypeScript
+      + Tailwind v4 + TanStack Query + react-router. Dashboard/detail pages
+      ported from the Jinja2 templates (avatar colors, status styling,
+      filters via URL search params). TypeScript compiles clean, production
+      build succeeds, backend verified against the real 230+ application
+      dataset via curl. Full browser-rendered verification is the user's
+      own terminal, not something run/backgrounded via Claude Code CLI (see
+      "Dev server policy" below) - don't background dev servers again.
 - [ ] React migration 3/4: interactivity (dnd-kit, Framer Motion, inline
-      edit, reprocess, toasts)
+      edit, reprocess, toasts). Bake in real usability-heuristic
+      requirements the user surfaced (NNGroup's 10 heuristics + a 2026 UX
+      principles piece): undo affordance after a drag-and-drop status
+      change (not just optimistic-update-and-hope), confirmation before
+      destructive actions (reprocess overwriting fields), visible
+      loading/status feedback, plain-language error messages (not raw
+      fetch/HTTP errors), keyboard-operable drag-and-drop (dnd-kit's actual
+      selling point here, not just "prettier than SortableJS").
 - [ ] React migration 4/4: remove old Jinja2 dashboard once parity
       confirmed, accessibility pass, Playwright E2E tests
 - [ ] M4: Scheduler/automation
