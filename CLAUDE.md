@@ -382,9 +382,41 @@ scripts/gmail_probe.py
         verified in a live browser this session - see the constraint above
         about not running dev servers via Claude Code's own tools; verified
         by the user in their own already-running terminals instead.
-- [ ] React migration 4/4b: Playwright E2E tests, broader accessibility
-      audit (color contrast, screen reader pass on the actual rendered
-      page, not just code review).
+- [x] React migration 4/4b: Playwright E2E tests + accessibility audit.
+      `frontend/e2e/` (`@playwright/test` + `@axe-core/playwright`, config
+      at `frontend/playwright.config.ts`): every test mocks `/api/*` via
+      `page.route` (`e2e/fixtures.ts`) instead of hitting the real FastAPI
+      backend or a real Gmail-derived database, so the suite is
+      self-contained and reproducible. Playwright's `webServer` builds and
+      runs `vite preview` for the test run only (`npm run test:e2e`), then
+      tears it down automatically - not a persistent dev server, so this
+      doesn't conflict with the no-backgrounding-dev-servers constraint
+      above. 12 tests across three files: dashboard rendering/filtering
+      (including a direct regression test for the keepPreviousData fix,
+      delaying the mocked response to assert the old board stays visible),
+      application detail (status badge/select decoupling, edit form,
+      reprocess confirm-dialog centering and cancel path), and keyboard
+      operability (Space drags, Enter opens - the dnd-kit KeyboardCodes
+      fix). `webServer.url` and `baseURL` had to use `http://localhost:4173`
+      rather than `127.0.0.1:4173` - the latter didn't resolve fast enough
+      on this machine and Playwright's server-ready check timed out.
+      Axe found real WCAG 2 AA color-contrast failures (not false
+      positives): several `text-slate-400`-on-light-background instances
+      (`Layout.tsx` header subtitle, the drag-hint span and platform-total
+      spans and empty-column placeholder in `Dashboard.tsx`, the detail
+      page's `dt` labels and table `thead` in `ApplicationDetail.tsx`) fell
+      below the required 4.5:1 ratio - all had the class order backwards
+      (`text-slate-400 dark:text-slate-500`, meaning dark mode got the
+      *lighter* shade and light mode got the one that needed to be darker).
+      Fixed by swapping to `text-slate-500 dark:text-slate-400` (and
+      `text-slate-300 dark:text-slate-600` -> `text-slate-500
+      dark:text-slate-500` for the empty-column placeholder). Both
+      `dashboard-has-no-detectable-accessibility-violations` and its detail-
+      page equivalent pass clean after the fix. Run with `npm run test:e2e`
+      in `frontend/`. Known remaining gap: axe-core catches contrast/ARIA/
+      semantic issues but is not a substitute for an actual screen-reader
+      pass (NVDA/VoiceOver) on the live app - not done yet, not chased
+      further without a concrete reported issue.
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 

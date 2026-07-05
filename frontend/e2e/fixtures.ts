@@ -1,0 +1,91 @@
+import type { Page } from '@playwright/test'
+
+export const STATUS_ORDER = ['applied', 'viewed', 'assessment', 'interview', 'offer', 'rejected', 'other']
+
+export function makeApplication(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 1,
+    company_name: 'Acme Corp',
+    job_title: 'Senior Backend Engineer',
+    platform: 'linkedin',
+    job_url: 'https://example.com/job/1',
+    location: 'Berlin, Germany',
+    salary_text: '70000-85000 EUR',
+    applied_date: '2026-01-15',
+    current_status: 'applied',
+    created_at: '2026-01-15T10:00:00Z',
+    updated_at: '2026-01-15T10:00:00Z',
+    ...overrides,
+  }
+}
+
+export function makeBoard() {
+  const apps = [
+    makeApplication({ id: 1, company_name: 'Acme Corp', current_status: 'applied' }),
+    makeApplication({ id: 2, company_name: 'Globex', current_status: 'interview', job_title: 'Platform Engineer' }),
+    makeApplication({ id: 3, company_name: 'Initech', current_status: 'rejected', job_title: 'Staff Engineer' }),
+  ]
+  const board: Record<string, unknown[]> = Object.fromEntries(STATUS_ORDER.map((s) => [s, []]))
+  for (const app of apps) {
+    ;(board[app.current_status as string] as unknown[]).push(app)
+  }
+  return { board, apps }
+}
+
+export function dashboardResponse() {
+  const { board, apps } = makeBoard()
+  return {
+    board,
+    status_order: STATUS_ORDER,
+    breakdown: [
+      { platform: 'linkedin', total: 2, responded: 1 },
+      { platform: 'other', total: 1, responded: 1 },
+    ],
+    reminders: [apps[0]],
+    filter_options: {
+      years: [2025, 2026],
+      platforms: ['linkedin', 'other'],
+      statuses: STATUS_ORDER,
+    },
+  }
+}
+
+/** Registers mocked handlers for every /api/* route the frontend calls, so
+ * tests never depend on a real FastAPI backend or real Gmail-derived data. */
+export async function mockApi(page: Page) {
+  const dashboard = dashboardResponse()
+
+  await page.route('**/api/dashboard*', async (route) => {
+    await route.fulfill({ json: dashboard })
+  })
+
+  await page.route('**/api/applications/*/status', async (route) => {
+    const body = route.request().postDataJSON() as { status: string }
+    await route.fulfill({ json: makeApplication({ current_status: body.status }) })
+  })
+
+  await page.route('**/api/applications/*/reprocess', async (route) => {
+    await route.fulfill({ json: makeApplication({ job_title: 'Re-extracted Title' }) })
+  })
+
+  await page.route('**/api/applications/*', async (route) => {
+    const method = route.request().method()
+    if (method === 'GET') {
+      await route.fulfill({
+        json: {
+          application: makeApplication(),
+          timeline: [
+            { id: 1, application_id: 1, status: 'applied', event_date: '2026-01-15', source_email_id: 'msg1', raw_extract_json: null, notes: null, created_at: '2026-01-15T10:00:00Z' },
+          ],
+        },
+      })
+      return
+    }
+    if (method === 'PATCH') {
+      const body = route.request().postDataJSON() as Record<string, string>
+      await route.fulfill({ json: makeApplication(body) })
+      return
+    }
+    await route.continue()
+  })
+}
