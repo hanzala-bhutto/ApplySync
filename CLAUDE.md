@@ -60,14 +60,17 @@ each session.
                                    raw email batch
                                               v
                     LangGraph pipeline: pipeline/graph.py
-   fetch_emails -> classify_relevant -> extract_structured_data
-        -> match_existing_application -> upsert_db
+   fetch_emails -> classify_and_extract -> match_existing_application
+        -> upsert_db
                                               |
                                               v
                           SQLite: db/models.py + repository.py
                                               |
                                               v
-                        Web UI: FastAPI + Jinja2 + HTMX (web/app.py)
+                   FastAPI JSON API (web/api.py, /api/*)
+                                              |
+                                              v
+                    React frontend (frontend/, separate dev server)
 
               Scheduler: APScheduler --triggers--> pipeline run every N min
               [Phase 2] LangSmith / Langfuse tracing wraps the LangGraph run
@@ -75,9 +78,25 @@ each session.
 
 **Tech choices** (see plan for full reasoning, don't relitigate without new
 information):
-- Web UI: FastAPI + Jinja2 + HTMX. Not Streamlit (teaches nothing about
-  backend/API design). Not a React SPA (disproportionate setup cost for a
-  single-user local tool).
+- **Frontend: React (Vite + TypeScript) + Tailwind + shadcn/ui + Framer
+  Motion + dnd-kit**, calling a FastAPI JSON API. This reverses the original
+  M3 choice (FastAPI + Jinja2 + HTMX, avoiding a React SPA as disproportionate
+  setup cost for a single-user tool) - the original Jinja2/HTMX dashboard
+  works and is not being deleted casually, but the user explicitly wants
+  React specifically for its accessible component ecosystem (Radix via
+  shadcn/ui - real keyboard nav/focus management, hard to hand-roll
+  correctly) and smoother animation (Framer Motion), and considers that
+  worth the added build/maintenance surface for this project. Both frontends
+  run as separate dev servers (not unified single-command serving) per an
+  explicit user choice - simpler setup over convenience.
+  Migration sequenced as: (1) JSON API alongside the existing Jinja routes,
+  verified with tests before touching any frontend code, (2) React app
+  scaffold + read-only dashboard parity, (3) interactivity/animation, (4)
+  remove the old Jinja2 templates/routes once parity is confirmed, plus an
+  accessibility pass and Playwright E2E tests. Don't delete `web/app.py`'s
+  Jinja routes or `web/templates/` until step 4 is actually reached and
+  verified - they're the fallback/reference during migration, not dead code
+  yet.
 - ORM: SQLModel, shares Pydantic modeling with the LLM structured-output
   schema.
 - Scheduler: APScheduler, in-process with the FastAPI app for v1.
@@ -269,6 +288,17 @@ scripts/gmail_probe.py
       that speed change (see LLM section above) before it could corrupt
       real data further. Bulk-reprocessed all 237 real applications with
       the corrected pipeline: 174 corrected, 13 deleted as false positives.
+- [x] React migration 1/4: JSON API. `web/api.py` adds `/api/dashboard`,
+      `/api/applications/{id}` (GET/PATCH), `/api/applications/{id}/status`
+      (PATCH), `/api/applications/{id}/reprocess` (POST), reusing
+      repository.py/pipeline logic unchanged. CORS enabled for
+      `http://localhost:5173` (Vite default). Existing Jinja2 dashboard
+      still works unchanged, both run side by side during migration.
+- [ ] React migration 2/4: scaffold + read-only dashboard parity
+- [ ] React migration 3/4: interactivity (dnd-kit, Framer Motion, inline
+      edit, reprocess, toasts)
+- [ ] React migration 4/4: remove old Jinja2 dashboard once parity
+      confirmed, accessibility pass, Playwright E2E tests
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 
