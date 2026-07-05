@@ -5,14 +5,13 @@ from applysync.db import repository as repo
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.nodes import (
     UNSPECIFIED_JOB_TITLE,
-    make_classify_node,
-    make_extract_node,
+    make_classify_and_extract_node,
     make_match_node,
     make_skip_node,
     make_upsert_node,
 )
-from applysync.pipeline.state import JobApplicationEvent, MatchDecision
-from tests.fakes import FakeChatModel, FakeExtractModel, FakeStructuredModel
+from applysync.pipeline.state import ClassifyAndExtractResult, JobApplicationEvent, MatchDecision
+from tests.fakes import FakeExtractModel, FakeStructuredModel
 
 
 def _email(sender="jobs@linkedin.com", subject="Your application was sent", body="body text"):
@@ -26,68 +25,86 @@ def _email(sender="jobs@linkedin.com", subject="Your application was sent", body
     )
 
 
-# --- classify_relevant ---
+# --- classify_and_extract (merged) ---
 
 
-def test_classify_relevant_marks_relevant_and_guesses_platform():
-    node = make_classify_node(FakeChatModel("RELEVANT"), get_sources())
-    result = node({"email": _email(sender="jobs-noreply@linkedin.com")})
-    assert result["classification"] == "relevant"
-    assert result["platform_hint"] == "linkedin"
+def test_classify_and_extract_relevant_extracts_fields_and_guesses_platform():
+    result = ClassifyAndExtractResult(
+        is_relevant=True, company_name="Acme", job_title="Engineer", status="applied"
+    )
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email(sender="jobs-noreply@linkedin.com")})
+
+    assert output["classification"] == "relevant"
+    assert output["platform_hint"] == "linkedin"
+    assert output["extracted"] == JobApplicationEvent(company_name="Acme", job_title="Engineer", status="applied")
+    assert output["error"] is None
 
 
-def test_classify_relevant_marks_irrelevant():
-    node = make_classify_node(FakeChatModel("IRRELEVANT"), get_sources())
-    result = node({"email": _email()})
-    assert result["classification"] == "irrelevant"
+def test_classify_and_extract_irrelevant_skips_extraction():
+    result = ClassifyAndExtractResult(is_relevant=False)
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email()})
+
+    assert output["classification"] == "irrelevant"
+    assert output["extracted"] is None
 
 
-def test_classify_relevant_unknown_sender_has_no_platform_hint():
-    node = make_classify_node(FakeChatModel("RELEVANT"), get_sources())
-    result = node({"email": _email(sender="careers@somecompany.example")})
-    assert result["platform_hint"] is None
+def test_classify_and_extract_missing_company_name_routes_to_error():
+    result = ClassifyAndExtractResult(is_relevant=True, company_name=None, job_title="Engineer", status="applied")
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email()})
+
+    assert output["extracted"] is None
+    assert output["error"] == "missing_required_fields"
 
 
-# --- extract_structured_data ---
+def test_classify_and_extract_missing_job_title_normalizes_instead_of_erroring():
+    result = ClassifyAndExtractResult(is_relevant=True, company_name="EGYM", job_title=None, status="applied")
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email()})
+
+    assert output["error"] is None
+    assert output["extracted"].job_title == UNSPECIFIED_JOB_TITLE
 
 
-def test_extract_structured_data_success():
-    event = JobApplicationEvent(company_name="Acme", job_title="Engineer", status="applied")
-    node = make_extract_node(FakeExtractModel(FakeStructuredModel(result=event)))
+def test_classify_and_extract_placeholder_job_title_text_normalizes():
+    """The model is told never to invent placeholder text, but does so
+    anyway in practice; normalize known placeholder strings too, not just
+    None/empty.
+    """
+    result = ClassifyAndExtractResult(
+        is_relevant=True, company_name="Acme", job_title="Not Specified", status="applied"
+    )
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
 
-    result = node({"email": _email(), "platform_hint": "linkedin"})
+    output = node({"email": _email()})
 
-    assert result["extracted"] == event
-    assert result["error"] is None
-
-
-def test_extract_structured_data_missing_required_fields_routes_to_error():
-    event = JobApplicationEvent(company_name="", job_title="Engineer", status="applied")
-    node = make_extract_node(FakeExtractModel(FakeStructuredModel(result=event)))
-
-    result = node({"email": _email(), "platform_hint": "linkedin"})
-
-    assert result["extracted"] is None
-    assert result["error"] == "missing_required_fields"
+    assert output["extracted"].job_title == UNSPECIFIED_JOB_TITLE
 
 
-def test_extract_structured_data_missing_job_title_normalizes_instead_of_erroring():
-    event = JobApplicationEvent(company_name="EGYM", job_title=None, status="applied")
-    node = make_extract_node(FakeExtractModel(FakeStructuredModel(result=event)))
+def test_classify_and_extract_llm_failure_routes_to_error_without_raising():
+    node = make_classify_and_extract_node(
+        FakeExtractModel(FakeStructuredModel(exception=ValueError("boom"))), get_sources()
+    )
 
-    result = node({"email": _email(), "platform_hint": "other"})
+    output = node({"email": _email()})
 
-    assert result["error"] is None
-    assert result["extracted"].job_title == UNSPECIFIED_JOB_TITLE
+    assert output["extracted"] is None
+    assert "extraction_failed" in output["error"]
 
 
-def test_extract_structured_data_llm_failure_routes_to_error_without_raising():
-    node = make_extract_node(FakeExtractModel(FakeStructuredModel(exception=ValueError("boom"))))
+def test_classify_and_extract_unknown_sender_has_no_platform_hint():
+    result = ClassifyAndExtractResult(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
 
-    result = node({"email": _email(), "platform_hint": "linkedin"})
+    output = node({"email": _email(sender="careers@somecompany.example")})
 
-    assert result["extracted"] is None
-    assert "extraction_failed" in result["error"]
+    assert output["platform_hint"] is None
 
 
 # --- match_existing_application ---
