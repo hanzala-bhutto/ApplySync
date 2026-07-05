@@ -16,7 +16,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
 
-    llm_model: str = "anthropic:claude-sonnet-5"
+    llm_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
+    nvidia_api_key: str = ""
     gmail_client_secrets_path: Path = Path(".secrets/credentials.json")
     gmail_token_path: Path = Path(".secrets/token.json")
     db_path: Path = Path("applysync.db")
