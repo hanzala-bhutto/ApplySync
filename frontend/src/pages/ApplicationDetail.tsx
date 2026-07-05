@@ -105,14 +105,18 @@ export function ApplicationDetail() {
             </div>
           </div>
 
-          <div>
-            <label htmlFor="status-select" className="sr-only">Status</label>
+          <div className="flex flex-col items-end gap-1.5">
+            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium capitalize ${style.bg} ${style.text}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} aria-hidden="true" />
+              {application.current_status}
+            </span>
+            <label htmlFor="status-select" className="sr-only">Change status</label>
             <select
               id="status-select"
               value={application.current_status}
               disabled={statusMutation.isPending}
               onChange={(e) => statusMutation.mutate(e.target.value)}
-              className={`rounded-full border-0 px-2.5 py-1 text-xs font-medium capitalize focus:outline-none focus:ring-2 focus:ring-brand-300 ${style.bg} ${style.text}`}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs capitalize focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-800"
             >
               {Object.keys(STATUS_STYLES).map((s) => (
                 <option key={s} value={s}>{s}</option>
