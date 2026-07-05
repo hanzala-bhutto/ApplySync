@@ -5,10 +5,11 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from applysync.db import repository as repo
+from applysync.db.models import Application, StatusEvent
 from applysync.gmail.client import GmailClient
 from applysync.pipeline.graph import reprocess_application
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", tags=["applications"])
 
 
 class StatusUpdate(BaseModel):
@@ -21,13 +22,42 @@ class FieldsUpdate(BaseModel):
     platform: str
 
 
+class FilterOptionsResponse(BaseModel):
+    years: list[int]
+    platforms: list[str]
+    statuses: list[str]
+
+
+class PlatformBreakdownRow(BaseModel):
+    platform: str
+    total: int
+    responded: int
+
+
+class DashboardResponse(BaseModel):
+    board: dict[str, list[Application]]
+    status_order: list[str]
+    breakdown: list[PlatformBreakdownRow]
+    reminders: list[Application]
+    filter_options: FilterOptionsResponse
+
+
+class ApplicationDetailResponse(BaseModel):
+    application: Application
+    timeline: list[StatusEvent]
+
+
 def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) -> None:
     """Registers the JSON API on `app`. Takes the dependency callables as
     params rather than importing them, so this module doesn't need to import
     back from web.app (which imports this module) and create a cycle.
     """
 
-    @router.get("/dashboard")
+    @router.get(
+        "/dashboard",
+        response_model=DashboardResponse,
+        summary="Get the full dashboard: pipeline board, reminders, and platform breakdown",
+    )
     def get_dashboard(
         session: Session = Depends(get_session),
         year: int | None = None,
@@ -48,7 +78,12 @@ def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) ->
             "filter_options": repo.filter_options(session),
         }
 
-    @router.get("/applications/{application_id}")
+    @router.get(
+        "/applications/{application_id}",
+        response_model=ApplicationDetailResponse,
+        summary="Get a single application and its status timeline",
+        responses={404: {"description": "Application not found"}},
+    )
     def get_application_detail(application_id: int, session: Session = Depends(get_session)):
         application = repo.get_application(session, application_id)
         if application is None:
@@ -58,14 +93,24 @@ def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) ->
             "timeline": repo.application_timeline(session, application_id),
         }
 
-    @router.patch("/applications/{application_id}/status")
+    @router.patch(
+        "/applications/{application_id}/status",
+        response_model=Application,
+        summary="Correct an application's status (e.g. drag-and-drop between Kanban columns)",
+        responses={404: {"description": "Application not found"}},
+    )
     def patch_status(application_id: int, body: StatusUpdate, session: Session = Depends(get_session)):
         application = repo.set_manual_status(session, application_id, body.status)
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found")
         return application
 
-    @router.patch("/applications/{application_id}")
+    @router.patch(
+        "/applications/{application_id}",
+        response_model=Application,
+        summary="Correct an application's extracted fields (company, title, platform)",
+        responses={404: {"description": "Application not found"}},
+    )
     def patch_fields(application_id: int, body: FieldsUpdate, session: Session = Depends(get_session)):
         application = repo.update_application_fields(
             session,
@@ -78,7 +123,12 @@ def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) ->
             raise HTTPException(status_code=404, detail="Application not found")
         return application
 
-    @router.post("/applications/{application_id}/reprocess")
+    @router.post(
+        "/applications/{application_id}/reprocess",
+        response_model=Application,
+        summary="Re-run extraction on the original email behind this application",
+        responses={404: {"description": "Application not found"}},
+    )
     def post_reprocess(
         application_id: int,
         session: Session = Depends(get_session),

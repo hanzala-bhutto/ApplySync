@@ -89,25 +89,26 @@ each session.
 
 **Tech choices** (see plan for full reasoning, don't relitigate without new
 information):
-- **Frontend: React (Vite + TypeScript) + Tailwind + shadcn/ui + Framer
-  Motion + dnd-kit**, calling a FastAPI JSON API. This reverses the original
-  M3 choice (FastAPI + Jinja2 + HTMX, avoiding a React SPA as disproportionate
-  setup cost for a single-user tool) - the original Jinja2/HTMX dashboard
-  works and is not being deleted casually, but the user explicitly wants
-  React specifically for its accessible component ecosystem (Radix via
-  shadcn/ui - real keyboard nav/focus management, hard to hand-roll
-  correctly) and smoother animation (Framer Motion), and considers that
-  worth the added build/maintenance surface for this project. Both frontends
-  run as separate dev servers (not unified single-command serving) per an
-  explicit user choice - simpler setup over convenience.
-  Migration sequenced as: (1) JSON API alongside the existing Jinja routes,
-  verified with tests before touching any frontend code, (2) React app
-  scaffold + read-only dashboard parity, (3) interactivity/animation, (4)
-  remove the old Jinja2 templates/routes once parity is confirmed, plus an
-  accessibility pass and Playwright E2E tests. Don't delete `web/app.py`'s
-  Jinja routes or `web/templates/` until step 4 is actually reached and
-  verified - they're the fallback/reference during migration, not dead code
-  yet.
+- **Frontend: React (Vite + TypeScript) + Tailwind + Framer Motion + dnd-kit**,
+  calling a FastAPI JSON API (`web/api.py`). This reverses the original M3
+  choice (FastAPI + Jinja2 + HTMX, avoiding a React SPA as disproportionate
+  setup cost for a single-user tool) - the user explicitly wants React for
+  its accessible component ecosystem and smoother animation, and considers
+  that worth the added build/maintenance surface for this project. Both
+  frontends run as separate dev servers (not unified single-command
+  serving) per an explicit user choice - simpler setup over convenience.
+  The old Jinja2 dashboard (`web/templates/`, HTML-rendering routes) is
+  **gone**, removed once the read-only React dashboard reached parity -
+  `web/app.py` is now just CORS + API registration, nothing else. This
+  happened before interactivity (drag-and-drop, edit, reprocess) was ported
+  to React, an explicit user call to cut over early rather than run both
+  UIs until full parity. Until React migration 4/4 lands, the dashboard is
+  browse/filter/navigate only; status corrections and reprocessing exist
+  in the API but nothing in the frontend calls them yet.
+- **API responses use explicit Pydantic response models** (not raw dicts),
+  specifically so FastAPI's auto-generated Swagger UI (`/docs`) and
+  `/openapi.json` produce a real, useful schema - this was an explicit ask,
+  not just a nice-to-have.
 - ORM: SQLModel, shares Pydantic modeling with the LLM structured-output
   schema.
 - Scheduler: APScheduler, in-process with the FastAPI app for v1.
@@ -328,8 +329,25 @@ scripts/gmail_probe.py
       loading/status feedback, plain-language error messages (not raw
       fetch/HTTP errors), keyboard-operable drag-and-drop (dnd-kit's actual
       selling point here, not just "prettier than SortableJS").
-- [ ] React migration 4/4: remove old Jinja2 dashboard once parity
-      confirmed, accessibility pass, Playwright E2E tests
+- [x] Removed the old Jinja2 dashboard (`web/templates/`, the HTML-rendering
+      routes in `web/app.py`) ahead of full React interactivity parity -
+      the user explicitly chose to cut over once the read-only React
+      dashboard worked, rather than wait for drag-and-drop/edit/reprocess
+      to be ported first. `web/app.py` is now just CORS + API registration;
+      all response shapes get explicit Pydantic response models
+      (`web/api.py`: `DashboardResponse`, `ApplicationDetailResponse`,
+      `PlatformBreakdownRow`, `FilterOptionsResponse`) so FastAPI's
+      auto-generated Swagger UI (`/docs`) and OpenAPI schema
+      (`/openapi.json`) are actually useful, not just raw untyped dicts.
+      `python-multipart`/`jinja2` dropped from dependencies (no longer used
+      now that nothing renders HTML server-side or parses form bodies).
+- [ ] React migration 4/4: port interactivity (drag-and-drop status
+      correction, inline field edit, reprocess) to React with dnd-kit +
+      Framer Motion, accessibility pass, Playwright E2E tests. The React
+      dashboard is currently read-only (view + filter + navigate only) -
+      those actions exist in the API (`PATCH .../status`, `PATCH
+      .../{id}`, `POST .../reprocess`) but nothing in the frontend calls
+      them yet.
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 
