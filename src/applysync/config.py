@@ -16,7 +16,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
 
-    llm_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
+    llm_model: str = "nvidia/nemotron-3-nano-30b-a3b"
     nvidia_api_key: str = ""
     gmail_client_secrets_path: Path = Path(".secrets/credentials.json")
     gmail_token_path: Path = Path(".secrets/token.json")

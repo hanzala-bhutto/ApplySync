@@ -106,17 +106,20 @@ single email. `processed_emails` (checked before invoking the graph at all)
 is the idempotency guard; the `SqliteSaver` checkpointer wired into `compile()`
 is crash-recovery only.
 
-1. `classify_relevant`: is this a job-application email? Conditional edge:
-   relevant -> `extract_structured_data`, irrelevant -> `mark_irrelevant`.
-2. `extract_structured_data`: structured-output extraction into
-   `JobApplicationEvent` (Pydantic). Conditional edge: only `company_name`
-   missing routes to `mark_extraction_failed` (an error state, not a crash);
-   a missing `job_title` is normalized to a fixed sentinel
-   (`nodes.UNSPECIFIED_JOB_TITLE`) instead, found necessary after a real
-   email (EGYM, no title in the body) got two different hallucinated
-   placeholders ("Not specified" / "Unknown") on two separate runs, which
-   silently created two application rows instead of deduping to one.
-3. `match_existing_application`: new vs. update-existing vs. duplicate.
+1. `classify_and_extract`: ONE structured-output call doing both
+   classification and extraction (`ClassifyAndExtractResult`), not two
+   separate calls. Halving the LLM round-trips per email mattered in
+   practice, see the LLM section below. Conditional edge: `extracted`
+   present -> `match_existing_application`; classification came back
+   irrelevant -> `mark_irrelevant`; otherwise (missing company_name, or the
+   call itself failed/returned None) -> `mark_extraction_failed`. A missing
+   `job_title`, or known placeholder text the model still occasionally
+   emits despite being told not to ("not specified", "unknown", "n/a", ...),
+   normalizes to a fixed sentinel (`nodes.UNSPECIFIED_JOB_TITLE`) instead of
+   erroring, since a genuinely missing title happens on real ATS emails and
+   inconsistent placeholders used to silently create duplicate application
+   rows instead of deduping to one.
+2. `match_existing_application`: new vs. update-existing vs. duplicate.
    Heuristic match via `repository.find_matching_application`: company+title+
    platform, normalized (lowercase, whitespace, legal suffixes like SE/GmbH/
    Inc/Ltd/AG/Co/LLC/Corp stripped) so e.g. "EGYM" and "EGYM SE" from two
@@ -134,26 +137,61 @@ is crash-recovery only.
    design, still not implemented. Don't attempt a bigger fuzzy-matching
    rewrite without a concrete case in hand; note more real examples here as
    they show up.
-4. `upsert_db`: deterministic, no LLM. Always calls `mark_processed`
+3. `upsert_db`: deterministic, no LLM. Always calls `mark_processed`
    regardless of new/update/duplicate_skip.
-5. `mark_irrelevant` / `mark_extraction_failed`: both just call
+4. `mark_irrelevant` / `mark_extraction_failed`: both just call
    `mark_processed` with a different `classification` value and write no
    application/event rows, so skipped emails are never retried but the
    reason they were skipped is recorded.
 
 Follow-up reminders are a dashboard SQL query, not a graph node.
 
-**LLM**: `nvidia/nemotron-3-ultra-550b-a55b` via `langchain-nvidia-ai-endpoints`
-(`ChatNVIDIA`), chosen for native tool-calling/structured-output fine-tuning.
-Two things required after hitting them against the real API:
+**LLM**: `nvidia/nemotron-3-nano-30b-a3b` via `langchain-nvidia-ai-endpoints`
+(`ChatNVIDIA`), reasoning/"thinking" disabled via
+`model_kwargs={"chat_template_kwargs": {"thinking": False}}`, `temperature=0`.
+Was `nemotron-3-ultra-550b-a55b` (2 calls/email, ~7-7.6s/call baseline); the
+current combo (1 call/email, ~0.81s measured with reasoning off) is roughly a
+9x speedup total, needed to make a 200+-application real sync complete in
+minutes instead of nearly an hour. That speed change cost real accuracy at
+first (see below) - don't swap models or disable reasoning again without
+re-running the accuracy check this section describes.
 - **Client-side rate limiting** (`llm.py`, `InMemoryRateLimiter` at 40
   requests/min): NVIDIA's free tier caps at 40 RPM and returns a 503
   ("Worker local total request limit reached") past it; throttling
-  client-side avoids burning retry/backoff time on avoidable 503s.
+  client-side avoids burning retry/backoff time on avoidable 503s. Once
+  per-call latency is fast enough, this 40 RPM cap becomes the real floor
+  for how fast a large sync can go (`N emails / 40 * 60` seconds minimum),
+  not model speed - confirmed against a real 430-email backfill (~14.8 min
+  actual vs. ~10.75 min theoretical floor at 40 RPM).
 - **`.with_retry(stop_after_attempt=5, wait_exponential_jitter=True)`** on
-  both the classify and extract model calls, for genuinely transient
-  failures (the free tier is a shared pool, so 503s can still happen even
-  under our own 40 RPM cap from other users' load).
+  the classify+extract call, for genuinely transient failures (the free tier
+  is a shared pool, so 503s can still happen even under our own 40 RPM cap
+  from other users' load).
+
+**Extraction accuracy is fragile to prompt/model changes, verify against
+real emails before trusting a change.** Switching to the faster model above
+initially produced real, serious errors caught by re-running 5 known real
+emails through the pipeline before touching production data: hallucinated
+"interview"/"offer"/"rejected" from neutral "we'll review and get back to
+you" language (temperature wasn't pinned, so results also weren't even
+reproducible run to run), two German-language "your draft application is
+incomplete" reminders wrongly tracked as real applications, "online
+assessment" confused with "interview", and company_name extraction
+degrading once the prompt got longer/more detailed. All fixed in the current
+prompt (`nodes._CLASSIFY_AND_EXTRACT_PROMPT`): `temperature=0`, an explicit
+"default to applied unless the email unambiguously states otherwise" rule, a
+new `assessment` status distinct from `interview`, bilingual
+incomplete-application phrases, an explicit instruction to ignore "similar
+jobs"/"you might also like" recommendation sections some ATS emails append
+(these list unrelated companies that were leaking into company_name), and
+defensive normalization of placeholder text the model still sometimes emits
+despite being told not to. A bulk reprocess of all 237 real applications
+with the corrected pipeline changed 174 of them (mostly false "rejected" ->
+"applied") and deleted 13 false positives - this was systemic, not a rare
+edge case. One known remaining gap: an email whose real content never states
+the employer at all (info genuinely isn't there, not a model failure) can
+still get a wrong company_name from surrounding noise; low frequency, not
+chased further without more concrete real examples.
 
 ## Repo layout
 
@@ -223,6 +261,14 @@ scripts/gmail_probe.py
       installed-app local-server flow from the M1 CLI spike), so first-run
       and any future re-consent happen inside the dashboard, not the
       terminal.
+- [x] Perf + accuracy pass (post-M3, triggered by the user's real 238-application
+      inbox only showing ~7-8 applications): fixed Gmail pagination (was
+      silently capped at 50 emails ever), merged classify+extract into one
+      LLM call, switched to nemotron-3-nano-30b-a3b with reasoning off
+      (~9x faster), then found and fixed a real accuracy regression from
+      that speed change (see LLM section above) before it could corrupt
+      real data further. Bulk-reprocessed all 237 real applications with
+      the corrected pipeline: 174 corrected, 13 deleted as false positives.
 - [ ] M4: Scheduler/automation
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 

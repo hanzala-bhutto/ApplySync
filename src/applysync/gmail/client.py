@@ -126,15 +126,35 @@ class GmailClient:
             self._service = build("gmail", "v1", credentials=creds)
         return self._service
 
-    def fetch_messages(self, query: str, max_results: int = 50) -> list[RawEmail]:
-        response = (
-            self.service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=max_results)
-            .execute()
-        )
+    def fetch_messages(self, query: str, max_results: int = 500) -> list[RawEmail]:
+        """max_results is a total cap across ALL pages, not a per-page size
+        (Gmail's list API caps each page at 100 regardless). Gmail's list
+        endpoint is paginated via nextPageToken; a single un-paginated call
+        silently misses everything past the first page. Confirmed against a
+        real inbox with 238+ applications: a single maxResults=50 call left
+        nextPageToken set, meaning most matching emails were never fetched.
+        """
+        refs: list[dict] = []
+        page_token: str | None = None
+        while len(refs) < max_results:
+            response = (
+                self.service.users()
+                .messages()
+                .list(
+                    userId="me",
+                    q=query,
+                    maxResults=min(100, max_results - len(refs)),
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            refs.extend(response.get("messages", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
         emails: list[RawEmail] = []
-        for ref in response.get("messages", []):
+        for ref in refs[:max_results]:
             full = (
                 self.service.users()
                 .messages()

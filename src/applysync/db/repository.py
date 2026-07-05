@@ -177,7 +177,25 @@ def update_application_fields(
     return application
 
 
-STATUS_ORDER = ["applied", "viewed", "interview", "offer", "rejected", "other"]
+def delete_application(session: Session, application_id: int) -> bool:
+    """Removes an application and its status events entirely. For the case
+    where reprocessing reveals it should never have been tracked at all
+    (e.g. an "incomplete application" reminder email misclassified as a real
+    submission), not for normal corrections - those are update_application_fields
+    / set_manual_status.
+    """
+    application = session.get(Application, application_id)
+    if application is None:
+        return False
+    events = session.exec(select(StatusEvent).where(StatusEvent.application_id == application_id)).all()
+    for event in events:
+        session.delete(event)
+    session.delete(application)
+    session.commit()
+    return True
+
+
+STATUS_ORDER = ["applied", "viewed", "assessment", "interview", "offer", "rejected", "other"]
 
 
 def applications_by_status(session: Session) -> dict[str, list[Application]]:
@@ -236,6 +254,22 @@ def create_pipeline_run(session: Session, run_id: str) -> PipelineRun:
     session.commit()
     session.refresh(run)
     return run
+
+
+def last_successful_run_started_at(session: Session) -> datetime | None:
+    """Bounds the Gmail query for subsequent syncs (build_search_query's
+    `after` param) so a caught-up inbox doesn't re-scan its entire history
+    every run. Uses started_at (not finished_at) of the last run to leave a
+    small overlap rather than a gap; processed_emails already dedupes
+    anything re-fetched in that overlap.
+    """
+    statement = (
+        select(PipelineRun)
+        .where(PipelineRun.finished_at.is_not(None))
+        .order_by(PipelineRun.started_at.desc())
+    )
+    last_run = session.exec(statement).first()
+    return last_run.started_at if last_run else None
 
 
 def finish_pipeline_run(

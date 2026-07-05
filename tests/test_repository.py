@@ -239,6 +239,29 @@ def test_update_application_fields_returns_none_for_unknown_id(session):
     assert repo.update_application_fields(session, 999, company_name="X") is None
 
 
+def test_delete_application_removes_application_and_its_events(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.add_status_event(
+        session, application_id=application.id, status="applied", event_date=datetime(2026, 1, 1), source_email_id="msg-1"
+    )
+
+    assert repo.delete_application(session, application.id) is True
+
+    assert repo.get_application(session, application.id) is None
+    assert repo.application_timeline(session, application.id) == []
+
+
+def test_delete_application_returns_false_for_unknown_id(session):
+    assert repo.delete_application(session, 999) is False
+
+
 def test_pipeline_run_lifecycle(session):
     repo.create_pipeline_run(session, "run-1")
     finished = repo.finish_pipeline_run(
@@ -251,3 +274,28 @@ def test_pipeline_run_lifecycle(session):
     )
     assert finished.finished_at is not None
     assert finished.emails_fetched == 10
+
+
+def test_last_successful_run_started_at_returns_none_when_no_runs(session):
+    assert repo.last_successful_run_started_at(session) is None
+
+
+def test_last_successful_run_started_at_ignores_unfinished_runs(session):
+    repo.create_pipeline_run(session, "run-unfinished")
+    assert repo.last_successful_run_started_at(session) is None
+
+
+def test_last_successful_run_started_at_returns_most_recent_finished_run(session):
+    run1 = repo.create_pipeline_run(session, "run-1")
+    repo.finish_pipeline_run(
+        session, "run-1", emails_fetched=1, emails_relevant=1, applications_created=1, events_created=1
+    )
+    run2 = repo.create_pipeline_run(session, "run-2")
+    repo.finish_pipeline_run(
+        session, "run-2", emails_fetched=1, emails_relevant=1, applications_created=1, events_created=1
+    )
+
+    result = repo.last_successful_run_started_at(session)
+
+    assert result == run2.started_at
+    assert result >= run1.started_at

@@ -19,7 +19,35 @@ class JobApplicationEvent(BaseModel):
         description="Job title applied for. Null if the email genuinely does not "
         "mention one, never a placeholder like 'not specified' or 'unknown'.",
     )
-    status: Literal["applied", "viewed", "interview", "rejected", "offer", "other"]
+    status: Literal["applied", "viewed", "assessment", "interview", "rejected", "offer", "other"]
+    job_url: str | None = Field(default=None, description="Link to the application or posting, if present")
+    location: str | None = Field(default=None, description="Job location, if mentioned")
+    salary_text: str | None = Field(default=None, description="Salary/compensation text, if mentioned")
+
+
+class ClassifyAndExtractResult(BaseModel):
+    """Structured-output schema for the merged classify+extract call. One
+    call instead of two (classify_relevant then extract_structured_data)
+    roughly halves per-email LLM latency, which mattered in practice: at
+    ~7s/call, two sequential calls put every email over a 10s target before
+    anything even went wrong.
+    """
+
+    is_relevant: bool = Field(
+        description="True if this is a genuine job-application confirmation or status "
+        "update (applied, viewed, interview invite, rejection, offer). False for job alert "
+        "digests, newsletters, marketing, or anything unrelated to an application you "
+        "personally submitted."
+    )
+    company_name: str | None = Field(default=None, description="Only if is_relevant")
+    job_title: str | None = Field(
+        default=None,
+        description="Job title applied for, only if is_relevant. Null if the email "
+        "genuinely does not mention one, never a placeholder like 'not specified'.",
+    )
+    status: Literal["applied", "viewed", "assessment", "interview", "rejected", "offer", "other"] | None = Field(
+        default=None, description="Only if is_relevant"
+    )
     job_url: str | None = Field(default=None, description="Link to the application or posting, if present")
     location: str | None = Field(default=None, description="Job location, if mentioned")
     salary_text: str | None = Field(default=None, description="Salary/compensation text, if mentioned")

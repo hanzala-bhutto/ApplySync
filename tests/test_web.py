@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from applysync.db import repository as repo
-from applysync.pipeline.state import JobApplicationEvent
+from applysync.pipeline.state import ClassifyAndExtractResult
 from applysync.web.app import create_app, get_gmail_client, get_llm_model, get_session
 from tests.fakes import FakeExtractModel, FakeStructuredModel
 
@@ -208,7 +208,9 @@ def test_reprocess_refetches_email_and_updates_fields(client):
             "body": {"data": _b64("Thanks for applying to Backend Engineer at Acme.")},
         },
     }
-    extracted = JobApplicationEvent(company_name="Acme", job_title="Backend Engineer", status="interview")
+    extracted = ClassifyAndExtractResult(
+        is_relevant=True, company_name="Acme", job_title="Backend Engineer", status="interview"
+    )
 
     client.app.dependency_overrides[get_gmail_client] = lambda: FakeGmailClient(raw_message)
     client.app.dependency_overrides[get_llm_model] = lambda: FakeExtractModel(

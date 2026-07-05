@@ -6,8 +6,8 @@ from applysync.db import repository as repo
 from applysync.db.models import StatusEvent
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.graph import process_emails
-from applysync.pipeline.state import JobApplicationEvent
-from tests.fakes import FakeCombinedModel
+from applysync.pipeline.state import ClassifyAndExtractResult
+from tests.fakes import FakeExtractModel, FakeStructuredModel
 
 
 def _email(message_id="msg-1", sender="jobs-noreply@linkedin.com", subject="Your application was sent", body="body"):
@@ -21,11 +21,17 @@ def _email(message_id="msg-1", sender="jobs-noreply@linkedin.com", subject="Your
     )
 
 
-def test_relevant_email_creates_application_end_to_end(session):
-    model = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="Acme", job_title="Engineer", status="applied"),
+def _model(is_relevant, company_name=None, job_title=None, status=None, exception=None):
+    if exception is not None:
+        return FakeExtractModel(FakeStructuredModel(exception=exception))
+    result = ClassifyAndExtractResult(
+        is_relevant=is_relevant, company_name=company_name, job_title=job_title, status=status
     )
+    return FakeExtractModel(FakeStructuredModel(result=result))
+
+
+def test_relevant_email_creates_application_end_to_end(session):
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
 
     stats = process_emails(
         [_email()],
@@ -44,7 +50,7 @@ def test_relevant_email_creates_application_end_to_end(session):
 
 
 def test_irrelevant_email_is_marked_processed_without_creating_application(session):
-    model = FakeCombinedModel(classify_content="IRRELEVANT")
+    model = _model(is_relevant=False)
 
     stats = process_emails(
         [_email()],
@@ -60,10 +66,7 @@ def test_irrelevant_email_is_marked_processed_without_creating_application(sessi
 
 
 def test_second_run_over_same_batch_processes_zero_new_emails(session):
-    model = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="Acme", job_title="Engineer", status="applied"),
-    )
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
     emails = [_email()]
 
     first = process_emails(
@@ -84,10 +87,7 @@ def test_second_run_over_same_batch_processes_zero_new_emails(session):
 
 
 def test_status_update_email_links_to_existing_application_not_a_duplicate(session):
-    model_applied = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="Acme", job_title="Engineer", status="applied"),
-    )
+    model_applied = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
     process_emails(
         [_email(message_id="msg-1")],
         model=model_applied,
@@ -97,10 +97,7 @@ def test_status_update_email_links_to_existing_application_not_a_duplicate(sessi
         checkpointer=MemorySaver(),
     )
 
-    model_interview = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="Acme", job_title="Engineer", status="interview"),
-    )
+    model_interview = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="interview")
     stats = process_emails(
         [_email(message_id="msg-2", subject="Update on your application")],
         model=model_interview,
@@ -125,10 +122,7 @@ def test_repeat_confirmation_emails_without_job_title_dedupe_to_one_application(
     should now normalize to the same value and dedupe to one application with
     two status events.
     """
-    model_first = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="EGYM", job_title=None, status="applied"),
-    )
+    model_first = _model(is_relevant=True, company_name="EGYM", job_title=None, status="applied")
     process_emails(
         [_email(message_id="msg-1", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_first,
@@ -138,10 +132,7 @@ def test_repeat_confirmation_emails_without_job_title_dedupe_to_one_application(
         checkpointer=MemorySaver(),
     )
 
-    model_second = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="EGYM", job_title=None, status="applied"),
-    )
+    model_second = _model(is_relevant=True, company_name="EGYM", job_title=None, status="applied")
     stats = process_emails(
         [_email(message_id="msg-2", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_second,
@@ -168,10 +159,7 @@ def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_ap
     application's two confirmation emails extracted as company_name "EGYM"
     and "EGYM SE" respectively, which used to create two application rows.
     """
-    model_first = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="EGYM", job_title=None, status="applied"),
-    )
+    model_first = _model(is_relevant=True, company_name="EGYM", job_title=None, status="applied")
     process_emails(
         [_email(message_id="msg-1", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_first,
@@ -181,10 +169,7 @@ def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_ap
         checkpointer=MemorySaver(),
     )
 
-    model_second = FakeCombinedModel(
-        classify_content="RELEVANT",
-        extract_result=JobApplicationEvent(company_name="EGYM SE", job_title=None, status="applied"),
-    )
+    model_second = _model(is_relevant=True, company_name="EGYM SE", job_title=None, status="applied")
     stats = process_emails(
         [_email(message_id="msg-2", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_second,

@@ -17,8 +17,7 @@ from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import build_search_query
 from applysync.llm import get_chat_model
 from applysync.pipeline.nodes import (
-    make_classify_node,
-    make_extract_node,
+    make_classify_and_extract_node,
     make_match_node,
     make_skip_node,
     make_upsert_node,
@@ -35,8 +34,7 @@ def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) ->
     """
     graph = StateGraph(EmailState)
 
-    graph.add_node("classify_relevant", make_classify_node(model, sources))
-    graph.add_node("extract_structured_data", make_extract_node(model))
+    graph.add_node("classify_and_extract", make_classify_and_extract_node(model, sources))
     graph.add_node("match_existing_application", make_match_node(session))
     graph.add_node("upsert_db", make_upsert_node(session, run_id=run_id))
     graph.add_node(
@@ -47,17 +45,23 @@ def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) ->
         make_skip_node(session, run_id=run_id, classification="extraction_failed"),
     )
 
-    graph.set_entry_point("classify_relevant")
+    graph.set_entry_point("classify_and_extract")
+
+    def _route(state):
+        if state.get("extracted") is not None:
+            return "ok"
+        if state.get("classification") == "irrelevant":
+            return "irrelevant"
+        return "failed"
 
     graph.add_conditional_edges(
-        "classify_relevant",
-        lambda state: state["classification"],
-        {"relevant": "extract_structured_data", "irrelevant": "mark_irrelevant"},
-    )
-    graph.add_conditional_edges(
-        "extract_structured_data",
-        lambda state: "ok" if state.get("extracted") is not None else "failed",
-        {"ok": "match_existing_application", "failed": "mark_extraction_failed"},
+        "classify_and_extract",
+        _route,
+        {
+            "ok": "match_existing_application",
+            "irrelevant": "mark_irrelevant",
+            "failed": "mark_extraction_failed",
+        },
     )
     graph.add_edge("match_existing_application", "upsert_db")
     graph.add_edge("upsert_db", END)
@@ -144,7 +148,8 @@ def run_sync(settings: Settings | None = None) -> dict:
 
         model = get_chat_model(settings)
         client = GmailClient(settings)
-        query = build_search_query(sources)
+        last_run_started_at = repo.last_successful_run_started_at(session)
+        query = build_search_query(sources, after=last_run_started_at.date() if last_run_started_at else None)
         emails = client.fetch_messages(query)
 
         checkpointer = make_checkpointer(settings.db_path)
@@ -191,8 +196,8 @@ def reprocess_application(
     )
     email = parse_message(raw_message)
 
-    extract_node = make_extract_node(model)
-    result = extract_node({"email": email, "platform_hint": application.platform})
+    classify_and_extract = make_classify_and_extract_node(model, get_sources())
+    result = classify_and_extract({"email": email})
     extracted = result.get("extracted")
     if extracted is None:
         return application

@@ -10,7 +10,7 @@ from sqlmodel import Session
 from applysync.config import SourcesConfig
 from applysync.db import repository as repo
 from applysync.gmail.query_builder import guess_platform
-from applysync.pipeline.state import EmailState, JobApplicationEvent, MatchDecision
+from applysync.pipeline.state import ClassifyAndExtractResult, EmailState, JobApplicationEvent, MatchDecision
 
 logger = logging.getLogger(__name__)
 
@@ -21,86 +21,122 @@ logger = logging.getLogger(__name__)
 # also lack a title, instead of creating a new application row each time.
 UNSPECIFIED_JOB_TITLE = "(unspecified role)"
 
-_CLASSIFY_PROMPT = """You triage inbox emails for a personal job application tracker.
+# The model is explicitly told not to invent placeholder text, but does so
+# anyway often enough in practice (seen for real: "not specified", "unknown",
+# "n/a") that we normalize known variants defensively rather than trust the
+# instruction alone. Checked case-insensitively.
+_PLACEHOLDER_JOB_TITLES = {"not specified", "unknown", "n/a", "none", "null", "unspecified"}
 
-Decide whether this email is a genuine job-application confirmation or status
-update (e.g. application received, under review, interview invite, rejection,
-offer) as opposed to a job alert digest, newsletter, marketing email, or
-anything unrelated to an application you personally submitted.
 
-From: {sender}
-Subject: {subject}
+def _normalize_job_title(job_title: str | None) -> str:
+    if not job_title or job_title.strip().lower() in _PLACEHOLDER_JOB_TITLES:
+        return UNSPECIFIED_JOB_TITLE
+    return job_title
 
-Body:
-{body}
+_CLASSIFY_AND_EXTRACT_PROMPT = """Triage this email for a personal job application tracker.
 
-Respond with exactly one word: RELEVANT or IRRELEVANT."""
+IMPORTANT: some emails contain a "similar jobs" / "you might also like" / "boost your chances" /
+"Aehnliche Jobs" recommendation section, usually near the end, listing OTHER unrelated companies
+and job postings. Never extract company_name or job_title from a recommendations/suggestions
+section - only from the part of the email that is actually about the application you submitted.
+If the real confirmation text itself never states the company, leave company_name null rather
+than using a name that only appears in a recommendations section.
 
-_EXTRACT_PROMPT = """Extract job application details from this email.
+STEP 1 - is_relevant: True only if a real application was actually SUBMITTED and this email is a
+confirmation or status update about it. False for job alert digests, newsletters, marketing, or
+reminders about an INCOMPLETE / not-yet-submitted draft application - in any language (English
+e.g. "finish your application", "your application is incomplete"; German e.g. "Bewerbung
+abschliessen", "noch nicht abgeschlossen", "vergiss nicht deine Bewerbung", "weitermachen, wo du
+aufgehoert hast"). If the email is nudging you to go back and complete a draft, nothing was
+actually submitted yet, so mark is_relevant=False.
 
-If a field is not mentioned in the email, leave it null, do not guess and do
-not invent placeholder text such as "not specified" or "unknown" - null means
-null. This matters especially for job_title: some confirmation emails never
-repeat the job title, in which case it must be null, not a made-up string.
+STEP 2 - company_name (REQUIRED whenever is_relevant is True, the most important field): the
+actual employer/hiring company, from the actual confirmation text, sender display name/domain,
+subject line, or signature - not from a recommendations section (see IMPORTANT above). Never use
+the name of the job board/platform itself (e.g. StepStone, Indeed, LinkedIn, Personio) as
+company_name, that is the messenger, not the employer. Leave company_name null if the real
+confirmation text genuinely never states the actual employer anywhere, do not fall back to the
+platform's name just to fill the field.
+
+STEP 3 - job_title: the role applied for, or null if the email genuinely never repeats it (do not
+invent placeholder text like "not specified").
+
+STEP 4 - status: the MOST CONSERVATIVE option the email text unambiguously supports. Default to
+"applied" for a generic acknowledgement ("we received it", "we will review and contact you") with
+no concrete next stage stated - do not infer a positive or negative outcome from polite language.
+- applied: received/sent/submitted, no further update yet (the default)
+- viewed: explicitly says a recruiter opened/viewed it, nothing more
+- assessment: invites an online test/quiz (not the same as an interview)
+- interview: explicitly schedules/invites a live interview/call with a person
+- rejected: explicitly states you were not selected
+- offer: explicitly states you were offered the position
+- other: relevant but doesn't fit above, or you're not confident which stage
+
+Also extract job_url, location, and salary_text if mentioned, else null.
 
 Platform hint from the sender address (may be wrong or absent): {platform_hint}
 
+From: {sender}
 Subject: {subject}
 
 Body:
 {body}"""
 
 
-def make_classify_node(model, sources: SourcesConfig):
+def make_classify_and_extract_node(model, sources: SourcesConfig):
     # NVIDIA's free-tier NIM endpoints can return a transient 503
     # ("Worker local total request limit reached") under shared load;
     # with_retry is LangChain's built-in backoff, not a hand-rolled loop.
-    resilient_model = model.with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
-
-    def classify_relevant(state: EmailState) -> dict:
-        email = state["email"]
-        platform_hint = guess_platform(email.sender, sources)
-
-        prompt = _CLASSIFY_PROMPT.format(
-            sender=email.sender, subject=email.subject, body=email.body[:2000]
-        )
-        response = resilient_model.invoke([HumanMessage(content=prompt)])
-        text = response.content.strip().upper()
-        classification = "relevant" if "IRRELEVANT" not in text and "RELEVANT" in text else "irrelevant"
-
-        return {"classification": classification, "platform_hint": platform_hint}
-
-    return classify_relevant
-
-
-def make_extract_node(model):
-    structured_model = model.with_structured_output(JobApplicationEvent).with_retry(
+    structured_model = model.with_structured_output(ClassifyAndExtractResult).with_retry(
         stop_after_attempt=5, wait_exponential_jitter=True
     )
 
-    def extract_structured_data(state: EmailState) -> dict:
+    def classify_and_extract(state: EmailState) -> dict:
         email = state["email"]
-        prompt = _EXTRACT_PROMPT.format(
-            platform_hint=state.get("platform_hint") or "unknown",
+        platform_hint = guess_platform(email.sender, sources)
+        prompt = _CLASSIFY_AND_EXTRACT_PROMPT.format(
+            platform_hint=platform_hint or "unknown",
+            sender=email.sender,
             subject=email.subject,
             body=email.body[:4000],
         )
 
         try:
-            extracted = structured_model.invoke([HumanMessage(content=prompt)])
+            result = structured_model.invoke([HumanMessage(content=prompt)])
         except Exception as exc:  # noqa: BLE001 - LLM/parse failures must not crash the run
-            logger.warning("extraction failed for message %s: %s", email.message_id, exc)
-            return {"extracted": None, "error": f"extraction_failed: {exc}"}
+            logger.warning("classify+extract failed for message %s: %s", email.message_id, exc)
+            result = None
 
-        if not extracted.company_name:
-            return {"extracted": None, "error": "missing_required_fields"}
+        if result is None:
+            return {
+                "classification": "relevant",
+                "platform_hint": platform_hint,
+                "extracted": None,
+                "error": "extraction_failed: model returned no result",
+            }
 
-        if not extracted.job_title:
-            extracted = extracted.model_copy(update={"job_title": UNSPECIFIED_JOB_TITLE})
+        if not result.is_relevant:
+            return {"classification": "irrelevant", "platform_hint": platform_hint, "extracted": None, "error": None}
 
-        return {"extracted": extracted, "error": None}
+        if not result.company_name:
+            return {
+                "classification": "relevant",
+                "platform_hint": platform_hint,
+                "extracted": None,
+                "error": "missing_required_fields",
+            }
 
-    return extract_structured_data
+        extracted = JobApplicationEvent(
+            company_name=result.company_name,
+            job_title=_normalize_job_title(result.job_title),
+            status=result.status or "other",
+            job_url=result.job_url,
+            location=result.location,
+            salary_text=result.salary_text,
+        )
+        return {"classification": "relevant", "platform_hint": platform_hint, "extracted": extracted, "error": None}
+
+    return classify_and_extract
 
 
 def make_match_node(session: Session):
