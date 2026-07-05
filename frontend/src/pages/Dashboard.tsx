@@ -206,7 +206,7 @@ export function Dashboard() {
       <section className="mb-10">
         <div className="mb-4 flex items-baseline justify-between">
           <h1 className="text-xl font-bold tracking-tight">Pipeline</h1>
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
             drag a card to correct its status (or focus it and press Space)
           </span>
         </div>
@@ -253,7 +253,7 @@ export function Dashboard() {
               <div key={row.platform} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 <div className="mb-2 flex items-baseline justify-between">
                   <span className="text-sm font-semibold capitalize">{row.platform}</span>
-                  <span className="text-xs text-slate-400 dark:text-slate-500">{row.total} sent</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">{row.total} sent</span>
                 </div>
                 <div className="mb-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
                   <div className="h-full rounded-full bg-brand-500" style={{ width: `${rate}%` }} />
@@ -297,7 +297,7 @@ function KanbanColumn({
           <KanbanCard key={application.id} application={application} onOpen={onOpen} />
         ))}
         {applications.length === 0 && (
-          <div className="flex h-16 items-center justify-center rounded-lg border border-dashed border-slate-200 text-xs text-slate-300 dark:border-slate-800 dark:text-slate-600">
+          <div className="flex h-16 items-center justify-center rounded-lg border border-dashed border-slate-200 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-500">
             Empty
           </div>
         )}

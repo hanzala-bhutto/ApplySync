@@ -18,7 +18,7 @@ export function Layout({ children }: { children: ReactNode }) {
             </span>
             <span className="text-[17px] font-bold tracking-tight">ApplySync</span>
           </Link>
-          <span className="hidden text-sm text-slate-400 sm:inline dark:text-slate-500">
+          <span className="hidden text-sm text-slate-500 sm:inline dark:text-slate-400">
             your job applications, in one place
           </span>
         </div>
