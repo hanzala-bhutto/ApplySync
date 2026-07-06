@@ -1,12 +1,13 @@
 import threading
 import time
 
-from applysync.web.sync import _state, get_run_sync
+from applysync.web.sync import _state, get_full_scan, get_run_sync
 
 
 def _reset_state():
     _state["in_progress"] = False
     _state["last_error"] = None
+    _state["current_run_type"] = None
 
 
 def _wait_until(predicate, timeout=2.0):
@@ -23,7 +24,13 @@ def test_sync_status_when_never_run(client):
     response = client.get("/api/sync/status")
     assert response.status_code == 200
     body = response.json()
-    assert body == {"in_progress": False, "last_error": None, "latest_run": None, "history": []}
+    assert body == {
+        "in_progress": False,
+        "last_error": None,
+        "current_run_type": None,
+        "latest_run": None,
+        "history": [],
+    }
 
 
 def test_start_sync_runs_in_background_and_reports_completion(client):
@@ -123,3 +130,78 @@ def test_sync_status_includes_recent_run_history(client):
     status = client.get("/api/sync/status").json()
     assert len(status["history"]) == 3
     assert {run["id"] for run in status["history"]} == {"run-0", "run-1", "run-2"}
+
+
+def test_start_full_scan_runs_in_background_and_reports_run_type(client):
+    _reset_state()
+    hold = threading.Event()
+    calls = []
+
+    def fake_full_scan(settings):
+        calls.append(settings)
+        hold.wait(timeout=5)
+        return {"run_id": "fake", "emails_fetched": 0, "emails_relevant": 0, "applications_created": 0, "events_created": 0}
+
+    client.app.dependency_overrides[get_full_scan] = lambda: fake_full_scan
+
+    response = client.post("/api/sync/full-scan")
+    assert response.status_code == 202
+    assert response.json() == {"status": "started"}
+
+    assert _wait_until(lambda: len(calls) == 1)
+
+    status = client.get("/api/sync/status").json()
+    assert status["in_progress"] is True
+    assert status["current_run_type"] == "full_scan"
+
+    hold.set()
+    assert _wait_until(lambda: not client.get("/api/sync/status").json()["in_progress"])
+
+    final_status = client.get("/api/sync/status").json()
+    assert final_status["current_run_type"] is None
+
+
+def test_full_scan_and_normal_sync_share_the_same_lock(client):
+    _reset_state()
+    hold = threading.Event()
+
+    def fake_full_scan(settings):
+        hold.wait(timeout=5)
+        return {"run_id": "fake", "emails_fetched": 0, "emails_relevant": 0, "applications_created": 0, "events_created": 0}
+
+    client.app.dependency_overrides[get_full_scan] = lambda: fake_full_scan
+
+    response = client.post("/api/sync/full-scan")
+    assert response.status_code == 202
+    assert _wait_until(lambda: client.get("/api/sync/status").json()["in_progress"] is True)
+
+    # A normal sync while a full scan is in progress must be rejected too -
+    # they share one lock, never run concurrently regardless of kind.
+    conflict = client.post("/api/sync")
+    assert conflict.status_code == 409
+
+    hold.set()
+    assert _wait_until(lambda: not client.get("/api/sync/status").json()["in_progress"])
+
+
+def test_normal_sync_and_full_scan_share_the_same_lock_other_direction(client):
+    """Inverse of the above: a full scan attempted while a normal sync is
+    already running must be rejected too."""
+    _reset_state()
+    hold = threading.Event()
+
+    def fake_run_sync(settings):
+        hold.wait(timeout=5)
+        return {"run_id": "fake", "emails_fetched": 0, "emails_relevant": 0, "applications_created": 0, "events_created": 0}
+
+    client.app.dependency_overrides[get_run_sync] = lambda: fake_run_sync
+
+    response = client.post("/api/sync")
+    assert response.status_code == 202
+    assert _wait_until(lambda: client.get("/api/sync/status").json()["in_progress"] is True)
+
+    conflict = client.post("/api/sync/full-scan")
+    assert conflict.status_code == 409
+
+    hold.set()
+    assert _wait_until(lambda: not client.get("/api/sync/status").json()["in_progress"])
