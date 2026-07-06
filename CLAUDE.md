@@ -563,6 +563,52 @@ scripts/gmail_probe.py
       (the `processed_emails` idempotency table already dedupes anything
       re-fetched in the wider window), and closes this whole class of edge
       case rather than just the one instance.
+- [x] Pipeline redesign (GitHub issues #17-21, real PR-per-issue workflow -
+      first time this project used pushed branches + `gh pr merge` end to
+      end instead of local-only merges): broadened Gmail keyword filter,
+      concurrent Gmail fetch, a new `scrutinize_relevance` LangGraph node,
+      `PipelineRun` incremental progress fields, and a dedicated `/sync`
+      staged-progress page.
+      - **#17**: `config/sources.yaml`'s `confirmation_keywords` gained
+        single-word matches (`applied`, `interview`, `rejected`, `offer`,
+        etc.) alongside the existing exact phrases, so emails whose subject
+        doesn't match a known phrase (a real rejection email from "dexter
+        health" was missed entirely before this) still get fetched.
+      - **#18**: `GmailClient.fetch_messages`'s per-message body fetch is
+        now a 10-worker `ThreadPoolExecutor` instead of sequential. Each
+        worker thread builds its own Gmail API service instance rather than
+        sharing one, since googleapiclient's httplib2 transport isn't
+        documented as thread-safe.
+      - **#19**: broadening the keyword filter alone would let more
+        job-alert digests reach the LLM-rate-limited `classify_and_extract`
+        call, so a new `scrutinize_relevance` node is now the graph's entry
+        point - a hybrid heuristic (instant reject on digest markers,
+        instant pass on the original narrow phrases) + one cheap
+        `RelevanceOnlyResult` LLM call only for genuinely ambiguous
+        subjects. Fails open (pass) on an LLM error. Rejected emails are
+        marked processed with `classification="scrutiny_rejected"`, reusing
+        the existing skip-node pattern.
+      - **#20**: `PipelineRun` gained `emails_total`/`emails_scrutinized`/
+        `emails_extracted`/`emails_written`/`updated_at`, added to an
+        existing `applysync.db` via a new additive `ALTER TABLE` migration
+        pass in `init_db` (this project still has no real migration tool).
+        `process_emails` switched from `compiled.invoke` to
+        `compiled.stream(stream_mode="updates")` so progress is observable
+        node-by-node, not just once a run finishes.
+      - **#21**: new `/sync` page (`frontend/src/pages/Sync.tsx`) shows a
+        4-stage progress view (Ingestion/Scrutiny/Extraction/Classification-
+        DB-Write) plus a recent-run history table, reusing `SyncButton` for
+        the trigger so it shares the header widget's react-query cache key.
+        `GET /api/sync/status` gained an optional `history` field (no new
+        endpoint).
+      - **Known remaining gap, not chased further yet**: none of this has
+        been verified against the real inbox. The reject-marker word list
+        and the ambiguous-case prompt wording are expected to need at least
+        one iteration once a real sync surfaces actual false positives/
+        negatives - this project's own history (the EGYM dedupe bug, the
+        pagination cap bug, the lookback-buffer bug) shows this class of
+        bug only ever surfaces against a real inbox, never in unit tests
+        alone. Do this before trusting the broadened filter on real data.
 - [ ] M4: Scheduler/automation - explicitly NOT the same as the manual
       button above: the user pointed out that an in-process APScheduler tied
       to the FastAPI app (the original plan) only ticks while `applysync
