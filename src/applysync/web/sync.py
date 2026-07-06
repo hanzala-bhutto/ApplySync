@@ -51,9 +51,12 @@ def _run_in_background(fn, settings: Settings) -> None:
     try:
         fn(settings)
     except Exception as exc:  # noqa: BLE001 - surfaced via /status, must not crash the background thread silently
-        _state["last_error"] = str(exc)
+        with _lock:
+            _state["last_error"] = str(exc)
     finally:
-        _state["in_progress"] = False
+        with _lock:
+            _state["in_progress"] = False
+            _state["current_run_type"] = None
 
 
 def _start(fn, settings: Settings, run_type: str) -> None:
@@ -103,10 +106,14 @@ def register_sync_routes(
         summary="Poll the currently running (or most recently finished) sync",
     )
     def sync_status(session: Session = Depends(get_session)):
+        with _lock:
+            in_progress = _state["in_progress"]
+            last_error = _state["last_error"]
+            current_run_type = _state["current_run_type"] if in_progress else None
         return {
-            "in_progress": _state["in_progress"],
-            "last_error": _state["last_error"],
-            "current_run_type": _state["current_run_type"] if _state["in_progress"] else None,
+            "in_progress": in_progress,
+            "last_error": last_error,
+            "current_run_type": current_run_type,
             "latest_run": repo.get_latest_pipeline_run(session),
             "history": repo.list_recent_pipeline_runs(session, limit=10),
         }

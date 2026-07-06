@@ -182,3 +182,26 @@ def test_full_scan_and_normal_sync_share_the_same_lock(client):
 
     hold.set()
     assert _wait_until(lambda: not client.get("/api/sync/status").json()["in_progress"])
+
+
+def test_normal_sync_and_full_scan_share_the_same_lock_other_direction(client):
+    """Inverse of the above: a full scan attempted while a normal sync is
+    already running must be rejected too."""
+    _reset_state()
+    hold = threading.Event()
+
+    def fake_run_sync(settings):
+        hold.wait(timeout=5)
+        return {"run_id": "fake", "emails_fetched": 0, "emails_relevant": 0, "applications_created": 0, "events_created": 0}
+
+    client.app.dependency_overrides[get_run_sync] = lambda: fake_run_sync
+
+    response = client.post("/api/sync")
+    assert response.status_code == 202
+    assert _wait_until(lambda: client.get("/api/sync/status").json()["in_progress"] is True)
+
+    conflict = client.post("/api/sync/full-scan")
+    assert conflict.status_code == 409
+
+    hold.set()
+    assert _wait_until(lambda: not client.get("/api/sync/status").json()["in_progress"])
