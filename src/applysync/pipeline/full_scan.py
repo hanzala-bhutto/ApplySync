@@ -32,6 +32,24 @@ def _extract_payload(extracted: JobApplicationEvent, platform_hint: str | None) 
     return json.dumps({**extracted.model_dump(), "platform": platform_hint or "other"})
 
 
+def _previous_payload(application) -> str:
+    """Snapshot of an existing application's current fields, for diff
+    display only - deliberately NOT built via JobApplicationEvent, since
+    that schema's status Literal excludes "declined" (manual-only, the LLM
+    should never produce it - see CLAUDE.md), but a real application can
+    legitimately hold that status. Validating an arbitrary stored value
+    against an LLM-output schema is the wrong tool here.
+    """
+    return json.dumps(
+        {
+            "company_name": application.company_name,
+            "job_title": application.job_title,
+            "status": application.current_status,
+            "platform": application.platform,
+        }
+    )
+
+
 def process_full_scan(
     emails: list[RawEmail],
     *,
@@ -93,14 +111,7 @@ def process_full_scan(
                     action="update_existing",
                     previous_classification=processed.classification,
                     suggested_classification="relevant",
-                    previous_extract_json=_extract_payload(
-                        JobApplicationEvent(
-                            company_name=old_application.company_name,
-                            job_title=old_application.job_title,
-                            status=old_application.current_status,
-                        ),
-                        old_application.platform,
-                    ),
+                    previous_extract_json=_previous_payload(old_application),
                     suggested_extract_json=_extract_payload(new_extracted, platform_hint),
                     pipeline_run_id=run_id,
                 )

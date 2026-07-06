@@ -100,6 +100,44 @@ def test_full_scan_suggests_update_when_re_extraction_disagrees_with_existing_ap
     assert '"status": "rejected"' in suggestion.suggested_extract_json
 
 
+def test_full_scan_handles_manually_declined_application_without_crashing(session):
+    """Regression test for a real full-scan crash: "declined" is a
+    manual-only status (set via the dashboard, never producible by the
+    LLM - see CLAUDE.md), so it's deliberately excluded from
+    JobApplicationEvent's status Literal. full_scan used to build the
+    "previous" snapshot by constructing a JobApplicationEvent from the
+    application's stored fields, which raised a pydantic ValidationError
+    the moment it hit a real declined application and crashed the whole
+    scan partway through.
+    """
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="declined",
+    )
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="declined",
+        event_date=datetime(2026, 1, 1),
+        source_email_id="msg-1",
+    )
+    repo.mark_processed(session, "msg-1", classification="relevant", pipeline_run_id="old-run")
+    run_id = _run(session)
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="offer")
+
+    stats = process_full_scan([_email()], model=model, session=session, sources=get_sources(), run_id=run_id)
+
+    assert stats["suggestions_created"] == 1
+    suggestion = session.exec(select(ReviewSuggestion)).one()
+    assert suggestion.action == "update_existing"
+    assert '"status": "declined"' in suggestion.previous_extract_json
+    assert '"status": "offer"' in suggestion.suggested_extract_json
+
+
 def test_full_scan_suggests_reclassify_irrelevant_when_no_longer_relevant(session):
     application = repo.create_application(
         session,
