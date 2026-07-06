@@ -9,6 +9,7 @@ import { ApplicationDetail } from './pages/ApplicationDetail'
 import { Reminders } from './pages/Reminders'
 import { Analytics } from './pages/Analytics'
 import { Sync } from './pages/Sync'
+import { Review } from './pages/Review'
 import { ToastProvider } from './lib/toast'
 
 const queryClient = new QueryClient()
@@ -24,6 +25,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/reminders" element={<Reminders />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/sync" element={<Sync />} />
+              <Route path="/review" element={<Review />} />
               <Route path="/applications/:id" element={<ApplicationDetail />} />
             </Routes>
           </Layout>

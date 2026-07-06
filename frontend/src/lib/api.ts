@@ -148,11 +148,13 @@ export interface PipelineRun {
   emails_extracted: number
   emails_written: number
   updated_at: string
+  run_type: 'incremental' | 'full_scan'
 }
 
 export interface SyncStatus {
   in_progress: boolean
   last_error: string | null
+  current_run_type: 'incremental' | 'full_scan' | null
   latest_run: PipelineRun | null
   history: PipelineRun[]
 }
@@ -163,4 +165,35 @@ export function getSyncStatus(): Promise<SyncStatus> {
 
 export function postSync(): Promise<{ status: string }> {
   return request('/api/sync', { method: 'POST' })
+}
+
+export function postFullScan(): Promise<{ status: string }> {
+  return request('/api/sync/full-scan', { method: 'POST' })
+}
+
+export interface ReviewSuggestion {
+  id: number
+  message_id: string
+  application_id: number | null
+  action: 'new_application' | 'update_existing' | 'reclassify_irrelevant'
+  previous_classification: string
+  suggested_classification: string
+  previous_extract_json: string | null
+  suggested_extract_json: string | null
+  status: 'pending' | 'approved' | 'rejected'
+  pipeline_run_id: string
+  created_at: string
+  reviewed_at: string | null
+}
+
+export function getReviewSuggestions(): Promise<ReviewSuggestion[]> {
+  return request('/api/review-suggestions')
+}
+
+export function postApproveSuggestion(id: number): Promise<ReviewSuggestion> {
+  return request(`/api/review-suggestions/${id}/approve`, { method: 'POST' })
+}
+
+export function postRejectSuggestion(id: number): Promise<ReviewSuggestion> {
+  return request(`/api/review-suggestions/${id}/reject`, { method: 'POST' })
 }
