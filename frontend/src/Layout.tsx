@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { GmailConnectionBanner } from './components/GmailConnectionBanner'
+import { SyncButton } from './components/SyncButton'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
@@ -43,9 +44,9 @@ export function Layout({ children }: { children: ReactNode }) {
               </NavLink>
             ))}
           </nav>
-          <span className="ml-auto hidden text-sm text-slate-500 sm:inline dark:text-slate-400">
-            your job applications, in one place
-          </span>
+          <div className="ml-auto">
+            <SyncButton />
+          </div>
         </div>
       </header>
       <GmailConnectionBanner />

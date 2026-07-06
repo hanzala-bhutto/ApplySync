@@ -513,7 +513,39 @@ scripts/gmail_probe.py
       dropdown or drag-and-drop like any other manual correction
       (`set_manual_status` already accepted arbitrary strings, no backend
       validation to loosen).
-- [ ] M4: Scheduler/automation
+- [x] Manual "Sync Now" button (M4 precursor - the user chose this over
+      automatic scheduling for now; see M4 below for why they're not the
+      same thing). `web/sync.py`: `POST /api/sync` starts `run_sync` in a
+      background `threading.Thread` (not `BackgroundTasks` - a full sync can
+      take minutes at the 40 RPM rate-limit floor, and this needs to survive
+      being kicked off from a request that returns immediately) and returns
+      202; a module-level lock + dict (`_state`) rejects a second concurrent
+      sync with 409 rather than queuing or double-running one - fine for a
+      single-process, single-user tool, no task queue needed. `GET
+      /api/sync/status` reports `in_progress`/`last_error`/`latest_run` (via
+      new `repo.get_latest_pipeline_run`, regardless of finished state, so
+      the frontend can show a run still in progress). `run_sync` is
+      dependency-injected via `get_run_sync` (same pattern as
+      `get_gmail_client`/`get_llm_model`) specifically so tests can swap in
+      a fake instead of hitting real Gmail/LLM calls from a background
+      thread. Frontend: `SyncButton` in `Layout.tsx` shows last-synced time,
+      polls `/api/sync/status` every 1.5s only while `in_progress` (not
+      constantly), and toasts the outcome (stats on success, the error
+      message on failure) the moment it flips back to not-in-progress.
+- [ ] M4: Scheduler/automation - explicitly NOT the same as the manual
+      button above: the user pointed out that an in-process APScheduler tied
+      to the FastAPI app (the original plan) only ticks while `applysync
+      serve` happens to be running, which doesn't fit how this tool is
+      actually used (dashboard opened occasionally, not a persistent
+      service) - a "daily sync" would silently not happen most days. Also
+      ruled out: Claude Code's own cloud scheduling (`/schedule`,
+      `CronCreate`) - those run in a cloud sandbox with no access to the
+      local `.secrets/token.json`, local SQLite file, or local venv, and
+      shipping credentials off-machine to make that work would contradict
+      the self-hosted/local design. Agreed direction when this gets picked
+      up: an OS-level scheduled task (Windows Task Scheduler) running
+      `applysync sync` once a day, independent of whether the dashboard/API
+      server is open.
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 
 ## Project skills
