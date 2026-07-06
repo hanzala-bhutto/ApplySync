@@ -198,3 +198,7 @@ export function postApproveSuggestion(id: number): Promise<ReviewSuggestion> {
 export function postRejectSuggestion(id: number): Promise<ReviewSuggestion> {
   return request(`/api/review-suggestions/${id}/reject`, { method: 'POST' })
 }
+
+export function postRejectAllSuggestions(): Promise<{ rejected_count: number }> {
+  return request('/api/review-suggestions/reject-all', { method: 'POST' })
+}

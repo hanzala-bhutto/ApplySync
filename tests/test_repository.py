@@ -389,6 +389,65 @@ def test_find_application_by_source_email_returns_linked_application(session):
     assert found.id == application.id
 
 
+def test_find_status_event_by_source_email(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="rejected",
+    )
+    repo.add_status_event(
+        session, application_id=application.id, status="applied", event_date=datetime(2026, 1, 1), source_email_id="msg-1"
+    )
+    repo.add_status_event(
+        session, application_id=application.id, status="rejected", event_date=datetime(2026, 1, 5), source_email_id="msg-2"
+    )
+
+    event = repo.find_status_event_by_source_email(session, "msg-1")
+
+    assert event is not None
+    assert event.status == "applied"
+    assert event.status != application.current_status
+
+
+def test_has_pending_suggestion_for_message(session):
+    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    assert repo.has_pending_suggestion_for_message(session, "msg-1") is False
+
+    suggestion = repo.create_review_suggestion(
+        session,
+        message_id="msg-1",
+        action="new_application",
+        previous_classification="irrelevant",
+        suggested_classification="relevant",
+        pipeline_run_id="run-1",
+    )
+    assert repo.has_pending_suggestion_for_message(session, "msg-1") is True
+
+    repo.reject_review_suggestion(session, suggestion.id)
+    assert repo.has_pending_suggestion_for_message(session, "msg-1") is False
+
+
+def test_reject_all_pending_suggestions(session):
+    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    for message_id in ("msg-1", "msg-2", "msg-3"):
+        repo.create_review_suggestion(
+            session,
+            message_id=message_id,
+            action="new_application",
+            previous_classification="irrelevant",
+            suggested_classification="relevant",
+            pipeline_run_id="run-1",
+        )
+
+    rejected_count = repo.reject_all_pending_suggestions(session)
+
+    assert rejected_count == 3
+    assert repo.list_pending_review_suggestions(session) == []
+
+
 # --- review suggestions ---
 
 

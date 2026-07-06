@@ -1,5 +1,13 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getReviewSuggestions, postApproveSuggestion, postRejectSuggestion, type ReviewSuggestion } from '../lib/api'
+import {
+  getReviewSuggestions,
+  postApproveSuggestion,
+  postRejectAllSuggestions,
+  postRejectSuggestion,
+  type ReviewSuggestion,
+} from '../lib/api'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useToast } from '../lib/toast'
 
 interface ExtractSnapshot {
@@ -47,6 +55,7 @@ function DiffRow({ label, before, after }: { label: string; before?: string | nu
 export function Review() {
   const { showToast } = useToast()
   const queryClient = useQueryClient()
+  const [confirmRejectAll, setConfirmRejectAll] = useState(false)
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['review-suggestions'],
@@ -77,6 +86,15 @@ export function Review() {
     onError: () => showToast({ message: 'Could not dismiss suggestion.', variant: 'error' }),
   })
 
+  const rejectAllMutation = useMutation({
+    mutationFn: postRejectAllSuggestions,
+    onSuccess: ({ rejected_count }) => {
+      invalidate()
+      showToast({ message: `Dismissed ${rejected_count} suggestion${rejected_count === 1 ? '' : 's'}.`, variant: 'info' })
+    },
+    onError: () => showToast({ message: 'Could not dismiss suggestions.', variant: 'error' }),
+  })
+
   if (isLoading) {
     return (
       <p className="text-sm text-slate-400" role="status">
@@ -96,9 +114,21 @@ export function Review() {
     <div>
       <div className="mb-4 flex items-baseline justify-between">
         <h1 className="text-xl font-bold tracking-tight">Review</h1>
-        <span className="text-xs text-slate-500 dark:text-slate-400">
-          {data.length} suggestion{data.length === 1 ? '' : 's'} from full-scan runs
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            {data.length} suggestion{data.length === 1 ? '' : 's'} from full-scan runs
+          </span>
+          {data.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setConfirmRejectAll(true)}
+              disabled={rejectAllMutation.isPending}
+              className="cursor-pointer rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            >
+              Reject All
+            </button>
+          )}
+        </div>
       </div>
 
       {data.length === 0 ? (
@@ -156,6 +186,18 @@ export function Review() {
           })}
         </ul>
       )}
+
+      <ConfirmDialog
+        open={confirmRejectAll}
+        title="Reject all suggestions?"
+        description={`This dismisses all ${data.length} pending suggestion${data.length === 1 ? '' : 's'} without changing any application data. This can't be undone.`}
+        confirmLabel="Reject All"
+        onCancel={() => setConfirmRejectAll(false)}
+        onConfirm={() => {
+          setConfirmRejectAll(false)
+          rejectAllMutation.mutate()
+        }}
+      />
     </div>
   )
 }
