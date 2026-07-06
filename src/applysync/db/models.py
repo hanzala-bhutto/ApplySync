@@ -75,3 +75,37 @@ class PipelineRun(SQLModel, table=True):
     emails_extracted: int = 0
     emails_written: int = 0
     updated_at: datetime = Field(default_factory=_utcnow)
+    # "incremental" (normal Sync Now / applysync sync) or "full_scan" (see
+    # ReviewSuggestion below) - lets the /sync page's shared progress-bar UI
+    # distinguish which kind of run is in flight.
+    run_type: str = "incremental"
+
+
+class ReviewSuggestion(SQLModel, table=True):
+    """A full-scan run's proposed change, never auto-applied: re-running
+    today's pipeline against an already-processed email can disagree with
+    what's currently stored (an improved prompt, a broadened keyword filter,
+    or the scrutiny node's rare false positives/negatives), so the new
+    result is queued here for the user to approve or reject rather than
+    silently overwriting real data.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    message_id: str
+    # Existing application this relates to, if any (None for a suggested
+    # brand-new application that doesn't match anything on record).
+    application_id: int | None = Field(default=None, foreign_key="application.id")
+    # "new_application" | "update_existing" | "reclassify_irrelevant"
+    action: str
+    previous_classification: str
+    suggested_classification: str
+    # JSON snapshots for diff display on the review page; None where not
+    # applicable (e.g. previous_extract_json is None if the email was never
+    # previously relevant, suggested_extract_json is None for
+    # reclassify_irrelevant since there's nothing new to extract).
+    previous_extract_json: str | None = None
+    suggested_extract_json: str | None = None
+    status: str = "pending"
+    pipeline_run_id: str
+    created_at: datetime = Field(default_factory=_utcnow)
+    reviewed_at: datetime | None = None

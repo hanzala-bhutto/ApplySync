@@ -37,6 +37,7 @@ def test_init_db_on_fresh_database_includes_pipeline_run_progress_columns(tmp_pa
         assert run.emails_extracted == 0
         assert run.emails_written == 0
         assert run.updated_at is not None
+        assert run.run_type == "incremental"
 
 
 def test_init_db_migrates_existing_database_missing_progress_columns(tmp_path: Path):
@@ -75,7 +76,14 @@ def test_init_db_migrates_existing_database_missing_progress_columns(tmp_path: P
     from sqlalchemy import inspect
 
     columns = {col["name"] for col in inspect(engine).get_columns(PipelineRun.__tablename__)}
-    assert {"emails_total", "emails_scrutinized", "emails_extracted", "emails_written", "updated_at"} <= columns
+    assert {
+        "emails_total",
+        "emails_scrutinized",
+        "emails_extracted",
+        "emails_written",
+        "updated_at",
+        "run_type",
+    } <= columns
 
     with get_session(db_path) as session:
         old_run = session.get(PipelineRun, "old-run")
@@ -85,3 +93,4 @@ def test_init_db_migrates_existing_database_missing_progress_columns(tmp_path: P
         assert old_run.emails_extracted == 0
         assert old_run.emails_written == 0
         assert old_run.emails_total is None
+        assert old_run.run_type == "incremental"
