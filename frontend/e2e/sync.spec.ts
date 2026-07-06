@@ -70,5 +70,7 @@ test('sync button shows an error toast when a sync fails', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Syncing...' })).toBeVisible()
 
   inProgress = false
-  await expect(page.getByText('Sync failed: Gmail API unreachable')).toBeVisible()
+  // Plain-language message, not the raw backend exception text
+  // ("Gmail API unreachable") - matches every other mutation's error toast.
+  await expect(page.getByText('Sync failed. Check the server terminal for details.')).toBeVisible()
 })

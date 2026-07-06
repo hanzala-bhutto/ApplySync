@@ -155,7 +155,7 @@ export function ApplicationDetail() {
             type="button"
             onClick={() => setEditing((v) => !v)}
             aria-expanded={editing}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700"
+            className="cursor-pointer rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700"
           >
             {editing ? 'Cancel edit' : 'Edit'}
           </button>
@@ -163,7 +163,7 @@ export function ApplicationDetail() {
             type="button"
             onClick={() => setConfirmReprocess(true)}
             disabled={reprocessMutation.isPending}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:hover:bg-slate-700"
+            className="cursor-pointer rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:hover:bg-slate-700"
           >
             {reprocessMutation.isPending ? 'Reprocessing...' : 'Reprocess from email'}
           </button>
@@ -262,7 +262,7 @@ function EditForm({
       <button
         type="submit"
         disabled={saving}
-        className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
+        className="cursor-pointer rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {saving ? 'Saving...' : 'Save'}
       </button>
@@ -287,7 +287,7 @@ function TimelineRow({ event }: { event: StatusEvent }) {
               type="button"
               onClick={() => setOpen((v) => !v)}
               aria-expanded={open}
-              className="text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+              className="cursor-pointer text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
             >
               {open ? 'Hide email' : 'View email'}
             </button>
@@ -339,7 +339,7 @@ function SourceEmailPanel({ eventId }: { eventId: number }) {
         <button
           type="button"
           onClick={() => setShowFull((v) => !v)}
-          className="mt-1.5 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+          className="mt-1.5 cursor-pointer text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
         >
           {showFull ? 'Show less' : 'Show full email'}
         </button>

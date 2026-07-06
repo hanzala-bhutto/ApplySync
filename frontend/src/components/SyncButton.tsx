@@ -36,7 +36,11 @@ export function SyncButton() {
     if (!data) return
     if (wasInProgress.current && !data.in_progress) {
       if (data.last_error) {
-        showToast({ message: `Sync failed: ${data.last_error}`, variant: 'error' })
+        // Plain-language message, not the raw backend exception text (same
+        // rule as every other mutation's error toast in this app) - the
+        // detail is still in data.last_error for anyone checking the server
+        // terminal, just not surfaced verbatim to the user here.
+        showToast({ message: 'Sync failed. Check the server terminal for details.', variant: 'error' })
       } else if (data.latest_run) {
         const run = data.latest_run
         showToast({
@@ -62,7 +66,7 @@ export function SyncButton() {
         type="button"
         onClick={() => mutation.mutate()}
         disabled={inProgress || mutation.isPending}
-        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+        className="cursor-pointer rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
       >
         {inProgress ? 'Syncing...' : 'Sync Now'}
       </button>
