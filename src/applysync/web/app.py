@@ -10,6 +10,7 @@ from applysync.gmail.client import GmailClient
 from applysync.llm import get_chat_model
 from applysync.web.api import register_api_routes
 from applysync.web.gmail_oauth import register_gmail_oauth_routes
+from applysync.web.sync import register_sync_routes
 
 # The React frontend (frontend/) and this API run as two separate servers
 # (by design, not just during development), so CORS is needed rather than
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     )
     register_api_routes(app, get_session=get_session, get_gmail_client=get_gmail_client, get_llm_model=get_llm_model)
     register_gmail_oauth_routes(app, get_settings=get_settings)
+    register_sync_routes(app, get_session=get_session, get_settings=get_settings)
 
     return app
 

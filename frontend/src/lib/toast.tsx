@@ -76,7 +76,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   toast.action?.onClick()
                   dismiss(toast.id)
                 }}
-                className="rounded font-semibold underline underline-offset-2 hover:no-underline"
+                className="cursor-pointer rounded font-semibold underline underline-offset-2 hover:no-underline"
               >
                 {toast.action.label}
               </button>
@@ -85,7 +85,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               type="button"
               onClick={() => dismiss(toast.id)}
               aria-label="Dismiss notification"
-              className="ml-1 opacity-60 hover:opacity-100"
+              className="ml-1 cursor-pointer opacity-60 hover:opacity-100"
             >
               &times;
             </button>

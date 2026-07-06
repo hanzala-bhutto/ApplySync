@@ -513,7 +513,70 @@ scripts/gmail_probe.py
       dropdown or drag-and-drop like any other manual correction
       (`set_manual_status` already accepted arbitrary strings, no backend
       validation to loosen).
-- [ ] M4: Scheduler/automation
+- [x] Manual "Sync Now" button (M4 precursor - the user chose this over
+      automatic scheduling for now; see M4 below for why they're not the
+      same thing). `web/sync.py`: `POST /api/sync` starts `run_sync` in a
+      background `threading.Thread` (not `BackgroundTasks` - a full sync can
+      take minutes at the 40 RPM rate-limit floor, and this needs to survive
+      being kicked off from a request that returns immediately) and returns
+      202; a module-level lock + dict (`_state`) rejects a second concurrent
+      sync with 409 rather than queuing or double-running one - fine for a
+      single-process, single-user tool, no task queue needed. `GET
+      /api/sync/status` reports `in_progress`/`last_error`/`latest_run` (via
+      new `repo.get_latest_pipeline_run`, regardless of finished state, so
+      the frontend can show a run still in progress). `run_sync` is
+      dependency-injected via `get_run_sync` (same pattern as
+      `get_gmail_client`/`get_llm_model`) specifically so tests can swap in
+      a fake instead of hitting real Gmail/LLM calls from a background
+      thread. Frontend: `SyncButton` in `Layout.tsx` shows last-synced time,
+      polls `/api/sync/status` every 1.5s only while `in_progress` (not
+      constantly), and toasts the outcome (stats on success, the error
+      message on failure) the moment it flips back to not-in-progress.
+
+      Also fixed a UX/accessibility inconsistency found while reviewing this
+      addition against the project's established mutation-feedback rules:
+      the sync failure toast showed the raw backend exception text instead
+      of a plain-language message (now generic, matching every other
+      mutation's error toast), and every real `<button>` app-wide was
+      missing `cursor-pointer` (Tailwind v4's preflight doesn't add it, so
+      native buttons show the plain arrow cursor, not a hand) - fixed
+      everywhere, not just the new button, for consistency.
+
+      Two more real bugs found by actually clicking "Sync Now" against the
+      real inbox (not caught by mocked tests, since those never exercise a
+      real Gmail query or real keyword coverage): (1) a real rejection email
+      ("Your application at dexter health") wasn't fetched at all - the
+      Gmail search is subject-only, and its subject didn't match any
+      `confirmation_keywords` phrase (closest was `"your application for"`,
+      but this one said "at"). Added `"your application at"` to
+      `config/sources.yaml`. (2) Fixing (1) alone wasn't enough: the two
+      zero-result manual syncs run while testing this feature still
+      completed "successfully" (0 emails found, but `finished_at` got set),
+      which advanced `last_successful_run_started_at` to that day. Since
+      Gmail's `after:` filter is date-only, the next sync would have used
+      `after:` today's date, permanently excluding the July 5 email even
+      after the keyword fix - a run that finds nothing still moves the
+      incremental bookmark forward, and once a date is passed, anything
+      before it is unreachable regardless of keyword coverage. Fixed by
+      adding `SYNC_LOOKBACK_BUFFER_DAYS = 3` in `graph.py`, subtracted from
+      the last run's date on top of the existing same-day overlap - cheap
+      (the `processed_emails` idempotency table already dedupes anything
+      re-fetched in the wider window), and closes this whole class of edge
+      case rather than just the one instance.
+- [ ] M4: Scheduler/automation - explicitly NOT the same as the manual
+      button above: the user pointed out that an in-process APScheduler tied
+      to the FastAPI app (the original plan) only ticks while `applysync
+      serve` happens to be running, which doesn't fit how this tool is
+      actually used (dashboard opened occasionally, not a persistent
+      service) - a "daily sync" would silently not happen most days. Also
+      ruled out: Claude Code's own cloud scheduling (`/schedule`,
+      `CronCreate`) - those run in a cloud sandbox with no access to the
+      local `.secrets/token.json`, local SQLite file, or local venv, and
+      shipping credentials off-machine to make that work would contradict
+      the self-hosted/local design. Agreed direction when this gets picked
+      up: an OS-level scheduled task (Windows Task Scheduler) running
+      `applysync sync` once a day, independent of whether the dashboard/API
+      server is open.
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 
 ## Project skills
