@@ -65,3 +65,13 @@ class PipelineRun(SQLModel, table=True):
     applications_created: int = 0
     events_created: int = 0
     errors: str | None = None
+    # Incremental progress fields, populated as the run streams through the
+    # graph rather than only once the whole run finishes - power a staged
+    # sync-progress view. All additive/nullable-or-defaulted: see
+    # db/init_db.py's migration for how these are added to an existing
+    # database file without a full migration tool.
+    emails_total: int | None = None
+    emails_scrutinized: int = 0
+    emails_extracted: int = 0
+    emails_written: int = 0
+    updated_at: datetime = Field(default_factory=_utcnow)

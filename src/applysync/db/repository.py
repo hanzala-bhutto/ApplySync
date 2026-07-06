@@ -357,6 +357,45 @@ def last_successful_run_started_at(session: Session) -> datetime | None:
     return last_run.started_at if last_run else None
 
 
+def update_pipeline_run_progress(
+    session: Session,
+    run_id: str,
+    *,
+    emails_total: int | None = None,
+    emails_scrutinized: int | None = None,
+    emails_extracted: int | None = None,
+    emails_written: int | None = None,
+) -> PipelineRun:
+    """Incremental progress update, called as the run streams through the
+    graph (see pipeline/graph.py's use of compiled.stream(...)) rather than
+    only once at the end - powers a staged sync-progress view. Only fields
+    actually passed in are overwritten, so a partial update (e.g. just
+    emails_scrutinized) doesn't reset the others.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise ValueError(f"No pipeline_run with id {run_id!r}")
+    if emails_total is not None:
+        run.emails_total = emails_total
+    if emails_scrutinized is not None:
+        run.emails_scrutinized = emails_scrutinized
+    if emails_extracted is not None:
+        run.emails_extracted = emails_extracted
+    if emails_written is not None:
+        run.emails_written = emails_written
+    run.updated_at = _utcnow()
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def list_recent_pipeline_runs(session: Session, *, limit: int = 10) -> list[PipelineRun]:
+    """Most recent runs, newest first - for the sync history list (#21)."""
+    statement = select(PipelineRun).order_by(PipelineRun.started_at.desc()).limit(limit)
+    return list(session.exec(statement).all())
+
+
 def finish_pipeline_run(
     session: Session,
     run_id: str,

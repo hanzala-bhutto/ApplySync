@@ -3,7 +3,7 @@ from sqlmodel import select
 
 from applysync.config import get_sources
 from applysync.db import repository as repo
-from applysync.db.models import ProcessedEmail, StatusEvent
+from applysync.db.models import PipelineRun, ProcessedEmail, StatusEvent
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.graph import process_emails
 from applysync.pipeline.state import ClassifyAndExtractResult
@@ -30,10 +30,27 @@ def _model(is_relevant, company_name=None, job_title=None, status=None, exceptio
     return FakeExtractModel(FakeStructuredModel(result=result))
 
 
+def _process_emails(emails, *, model, session, run_id, sources=None, checkpointer=None):
+    """process_emails now writes incremental progress to the pipeline_run row
+    (see repo.update_pipeline_run_progress), which real production code
+    always creates first via repo.create_pipeline_run (run_sync). Tests call
+    process_emails directly, so this wrapper creates that row first.
+    """
+    repo.create_pipeline_run(session, run_id)
+    return process_emails(
+        emails,
+        model=model,
+        session=session,
+        sources=sources or get_sources(),
+        run_id=run_id,
+        checkpointer=checkpointer or MemorySaver(),
+    )
+
+
 def test_relevant_email_creates_application_end_to_end(session):
     model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
 
-    stats = process_emails(
+    stats = _process_emails(
         [_email()],
         model=model,
         session=session,
@@ -52,7 +69,7 @@ def test_relevant_email_creates_application_end_to_end(session):
 def test_irrelevant_email_is_marked_processed_without_creating_application(session):
     model = _model(is_relevant=False)
 
-    stats = process_emails(
+    stats = _process_emails(
         [_email()],
         model=model,
         session=session,
@@ -69,10 +86,10 @@ def test_second_run_over_same_batch_processes_zero_new_emails(session):
     model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
     emails = [_email()]
 
-    first = process_emails(
+    first = _process_emails(
         emails, model=model, session=session, sources=get_sources(), run_id="run-1", checkpointer=MemorySaver()
     )
-    second = process_emails(
+    second = _process_emails(
         emails, model=model, session=session, sources=get_sources(), run_id="run-2", checkpointer=MemorySaver()
     )
 
@@ -88,7 +105,7 @@ def test_second_run_over_same_batch_processes_zero_new_emails(session):
 
 def test_status_update_email_links_to_existing_application_not_a_duplicate(session):
     model_applied = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
-    process_emails(
+    _process_emails(
         [_email(message_id="msg-1")],
         model=model_applied,
         session=session,
@@ -98,7 +115,7 @@ def test_status_update_email_links_to_existing_application_not_a_duplicate(sessi
     )
 
     model_interview = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="interview")
-    stats = process_emails(
+    stats = _process_emails(
         [_email(message_id="msg-2", subject="Update on your application")],
         model=model_interview,
         session=session,
@@ -123,7 +140,7 @@ def test_repeat_confirmation_emails_without_job_title_dedupe_to_one_application(
     two status events.
     """
     model_first = _model(is_relevant=True, company_name="EGYM", job_title=None, status="applied")
-    process_emails(
+    _process_emails(
         [_email(message_id="msg-1", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_first,
         session=session,
@@ -133,7 +150,7 @@ def test_repeat_confirmation_emails_without_job_title_dedupe_to_one_application(
     )
 
     model_second = _model(is_relevant=True, company_name="EGYM", job_title=None, status="applied")
-    stats = process_emails(
+    stats = _process_emails(
         [_email(message_id="msg-2", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_second,
         session=session,
@@ -154,6 +171,18 @@ def test_repeat_confirmation_emails_without_job_title_dedupe_to_one_application(
     assert len({e.application_id for e in events}) == 1
 
 
+def test_process_emails_tracks_incremental_progress_counters(session):
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
+
+    _process_emails([_email()], model=model, session=session, run_id="run-1")
+
+    run = session.get(PipelineRun, "run-1")
+    assert run.emails_total == 1
+    assert run.emails_scrutinized == 1
+    assert run.emails_extracted == 1
+    assert run.emails_written == 1
+
+
 def test_scrutiny_rejected_email_never_reaches_classify_and_extract(session):
     """A digest-marker subject should short-circuit at scrutinize_relevance
     without ever invoking classify_and_extract - proven here by using a model
@@ -161,7 +190,7 @@ def test_scrutiny_rejected_email_never_reaches_classify_and_extract(session):
     """
     model = FakeExtractModel(FakeStructuredModel(exception=RuntimeError("classify_and_extract must not run")))
 
-    stats = process_emails(
+    stats = _process_emails(
         [_email(subject="New jobs matching your search - jobs for you this week")],
         model=model,
         session=session,
@@ -181,7 +210,7 @@ def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_ap
     and "EGYM SE" respectively, which used to create two application rows.
     """
     model_first = _model(is_relevant=True, company_name="EGYM", job_title=None, status="applied")
-    process_emails(
+    _process_emails(
         [_email(message_id="msg-1", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_first,
         session=session,
@@ -191,7 +220,7 @@ def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_ap
     )
 
     model_second = _model(is_relevant=True, company_name="EGYM SE", job_title=None, status="applied")
-    stats = process_emails(
+    stats = _process_emails(
         [_email(message_id="msg-2", sender="jobs@egym.com", subject="Thank you for your application at EGYM!")],
         model=model_second,
         session=session,

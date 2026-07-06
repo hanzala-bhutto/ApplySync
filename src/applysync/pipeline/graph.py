@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -104,6 +105,17 @@ def make_checkpointer(db_path: Path):
     return saver
 
 
+# Nodes that end an email's path through the graph (mutually exclusive per
+# email: exactly one of these runs for any given email), used to count
+# emails_written incrementally as the run streams rather than only at the end.
+_TERMINAL_NODES = {"upsert_db", "mark_scrutiny_rejected", "mark_irrelevant", "mark_extraction_failed"}
+
+# Cheap SQLite commits locally; this is a safety margin against pathological
+# burst cases (e.g. many emails resolved in the same instant), not a hard
+# requirement for correctness.
+_PROGRESS_FLUSH_INTERVAL_SECONDS = 0.5
+
+
 def process_emails(
     emails: list[RawEmail],
     *,
@@ -117,6 +129,13 @@ def process_emails(
     emails, runs each new one through the graph, and tallies stats. Takes
     the email list directly rather than fetching it, so tests can pass
     fixtures instead of hitting the real Gmail API.
+
+    Uses compiled.stream(stream_mode="updates") rather than .invoke() so each
+    node's completion is observable as it happens (see
+    repo.update_pipeline_run_progress) - the same per-email final result is
+    reconstructed by merging each node's partial update, since there is no
+    custom state reducer here (later updates simply overwrite the same keys,
+    matching what .invoke() returned before this change).
     """
     compiled = compile_graph(model, session, sources, run_id, checkpointer=checkpointer)
 
@@ -125,10 +144,41 @@ def process_emails(
     emails_relevant = 0
     applications_created = 0
     events_created = 0
+    emails_scrutinized = 0
+    emails_extracted = 0
+    emails_written = 0
+
+    repo.update_pipeline_run_progress(session, run_id, emails_total=len(new_emails))
+    last_flush = time.monotonic()
+
+    def _flush_progress(*, force: bool = False) -> None:
+        nonlocal last_flush
+        now = time.monotonic()
+        if not force and now - last_flush < _PROGRESS_FLUSH_INTERVAL_SECONDS:
+            return
+        repo.update_pipeline_run_progress(
+            session,
+            run_id,
+            emails_scrutinized=emails_scrutinized,
+            emails_extracted=emails_extracted,
+            emails_written=emails_written,
+        )
+        last_flush = now
 
     for email in new_emails:
         config = {"configurable": {"thread_id": email.message_id}}
-        final_state = compiled.invoke({"email": email}, config=config)
+        final_state: dict = {}
+
+        for update in compiled.stream({"email": email}, config=config, stream_mode="updates"):
+            for node_name, node_output in update.items():
+                final_state.update(node_output or {})
+                if node_name == "scrutinize_relevance":
+                    emails_scrutinized += 1
+                elif node_name == "classify_and_extract":
+                    emails_extracted += 1
+                if node_name in _TERMINAL_NODES:
+                    emails_written += 1
+            _flush_progress()
 
         if final_state.get("classification") == "relevant":
             emails_relevant += 1
@@ -139,6 +189,8 @@ def process_emails(
                 applications_created += 1
             if match.action in ("new_application", "update_existing"):
                 events_created += 1
+
+    _flush_progress(force=True)
 
     return {
         "emails_fetched": len(new_emails),
