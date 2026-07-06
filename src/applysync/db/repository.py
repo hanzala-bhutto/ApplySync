@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime, timedelta, timezone
 
 from sqlmodel import Session, func, select
 
-from applysync.db.models import Application, PipelineRun, ProcessedEmail, StatusEvent
+from applysync.db.models import Application, PipelineRun, ProcessedEmail, ReviewSuggestion, StatusEvent
 
 # Common legal-entity suffixes that show up inconsistently across emails for
 # the same real company (e.g. "EGYM" vs "EGYM SE" - two confirmation emails
@@ -325,8 +326,8 @@ def stale_applications_page(
     return list(session.exec(statement).all())
 
 
-def create_pipeline_run(session: Session, run_id: str) -> PipelineRun:
-    run = PipelineRun(id=run_id)
+def create_pipeline_run(session: Session, run_id: str, *, run_type: str = "incremental") -> PipelineRun:
+    run = PipelineRun(id=run_id, run_type=run_type)
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -419,3 +420,129 @@ def finish_pipeline_run(
     session.commit()
     session.refresh(run)
     return run
+
+
+def find_application_by_source_email(session: Session, message_id: str) -> Application | None:
+    """Whichever application a previously-processed email contributed a
+    status event to, if any - used by full_scan to determine prior context
+    when re-examining an already-processed message. None means the email
+    was never linked to a real application (it was irrelevant, rejected, or
+    extraction failed) at the time it was originally processed.
+    """
+    statement = select(StatusEvent).where(StatusEvent.source_email_id == message_id)
+    event = session.exec(statement).first()
+    if event is None:
+        return None
+    return session.get(Application, event.application_id)
+
+
+def create_review_suggestion(
+    session: Session,
+    *,
+    message_id: str,
+    action: str,
+    previous_classification: str,
+    suggested_classification: str,
+    pipeline_run_id: str,
+    application_id: int | None = None,
+    previous_extract_json: str | None = None,
+    suggested_extract_json: str | None = None,
+) -> ReviewSuggestion:
+    suggestion = ReviewSuggestion(
+        message_id=message_id,
+        application_id=application_id,
+        action=action,
+        previous_classification=previous_classification,
+        suggested_classification=suggested_classification,
+        previous_extract_json=previous_extract_json,
+        suggested_extract_json=suggested_extract_json,
+        pipeline_run_id=pipeline_run_id,
+    )
+    session.add(suggestion)
+    session.commit()
+    session.refresh(suggestion)
+    return suggestion
+
+
+def list_pending_review_suggestions(session: Session) -> list[ReviewSuggestion]:
+    statement = (
+        select(ReviewSuggestion)
+        .where(ReviewSuggestion.status == "pending")
+        .order_by(ReviewSuggestion.created_at)
+    )
+    return list(session.exec(statement).all())
+
+
+def approve_review_suggestion(session: Session, suggestion_id: int) -> ReviewSuggestion:
+    """Applies the suggested change to the real Application/StatusEvent
+    tables (for new_application/update_existing), or simply marks the
+    suggestion resolved with no data change (for reclassify_irrelevant -
+    automatically deleting real application data from a full scan is too
+    risky; the existing "delete application" action on the detail page is
+    the manual follow-up if the user agrees it should go).
+    """
+    suggestion = session.get(ReviewSuggestion, suggestion_id)
+    if suggestion is None:
+        raise ValueError(f"No review_suggestion with id {suggestion_id!r}")
+    if suggestion.status != "pending":
+        return suggestion
+
+    if suggestion.action in ("new_application", "update_existing") and suggestion.suggested_extract_json:
+        extracted = json.loads(suggestion.suggested_extract_json)
+        event_date = _utcnow()
+        if suggestion.action == "new_application":
+            application = create_application(
+                session,
+                company_name=extracted["company_name"],
+                job_title=extracted["job_title"],
+                platform=extracted.get("platform") or "other",
+                applied_date=event_date.date(),
+                current_status=extracted["status"],
+                job_url=extracted.get("job_url"),
+                location=extracted.get("location"),
+                salary_text=extracted.get("salary_text"),
+            )
+            add_status_event(
+                session,
+                application_id=application.id,
+                status=extracted["status"],
+                event_date=event_date,
+                source_email_id=suggestion.message_id,
+                raw_extract_json=suggestion.suggested_extract_json,
+                notes="Full-scan suggestion, approved",
+            )
+        else:
+            update_application_fields(
+                session,
+                suggestion.application_id,
+                company_name=extracted.get("company_name"),
+                job_title=extracted.get("job_title"),
+            )
+            add_status_event(
+                session,
+                application_id=suggestion.application_id,
+                status=extracted["status"],
+                event_date=event_date,
+                source_email_id=suggestion.message_id,
+                raw_extract_json=suggestion.suggested_extract_json,
+                notes="Full-scan suggestion, approved",
+            )
+
+    suggestion.status = "approved"
+    suggestion.reviewed_at = _utcnow()
+    session.add(suggestion)
+    session.commit()
+    session.refresh(suggestion)
+    return suggestion
+
+
+def reject_review_suggestion(session: Session, suggestion_id: int) -> ReviewSuggestion:
+    suggestion = session.get(ReviewSuggestion, suggestion_id)
+    if suggestion is None:
+        raise ValueError(f"No review_suggestion with id {suggestion_id!r}")
+    suggestion.status = "rejected"
+    suggestion.reviewed_at = _utcnow()
+    session.add(suggestion)
+    session.commit()
+    session.refresh(suggestion)
+    return suggestion

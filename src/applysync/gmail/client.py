@@ -163,13 +163,17 @@ class GmailClient:
             if not page_token:
                 break
 
-        return self._fetch_message_bodies([ref["id"] for ref in refs[:max_results]])
+        return self.fetch_messages_by_id([ref["id"] for ref in refs[:max_results]])
 
-    def _fetch_message_bodies(self, message_ids: list[str]) -> list[RawEmail]:
-        """Fetch each message's full body concurrently. 10 workers is
-        deliberately conservative: the LLM's 40rpm rate limit is the real
-        bottleneck for a full sync, so faster fetching doesn't shorten
-        wall-clock time much - there is no benefit to pushing this higher.
+    def fetch_messages_by_id(self, message_ids: list[str]) -> list[RawEmail]:
+        """Fetch each message's full body concurrently, given ids directly
+        rather than a search query - used both by fetch_messages' own
+        pagination result and by full_scan (which re-fetches every
+        previously-processed message id, bypassing Gmail search entirely).
+        10 workers is deliberately conservative: the LLM's 40rpm rate limit
+        is the real bottleneck for a full sync, so faster fetching doesn't
+        shorten wall-clock time much - there is no benefit to pushing this
+        higher.
 
         A failed per-message fetch (network blip, transient error) is
         logged and excluded rather than aborting the whole batch; it is

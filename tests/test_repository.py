@@ -361,3 +361,153 @@ def test_last_successful_run_started_at_returns_most_recent_finished_run(session
 
     assert result == run2.started_at
     assert result >= run1.started_at
+
+
+# --- find_application_by_source_email ---
+
+
+def test_find_application_by_source_email_returns_none_when_never_linked(session):
+    assert repo.find_application_by_source_email(session, "msg-unknown") is None
+
+
+def test_find_application_by_source_email_returns_linked_application(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.add_status_event(
+        session, application_id=application.id, status="applied", event_date=datetime(2026, 1, 1), source_email_id="msg-1"
+    )
+
+    found = repo.find_application_by_source_email(session, "msg-1")
+
+    assert found is not None
+    assert found.id == application.id
+
+
+# --- review suggestions ---
+
+
+def test_create_and_list_pending_review_suggestions(session):
+    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_review_suggestion(
+        session,
+        message_id="msg-1",
+        action="new_application",
+        previous_classification="irrelevant",
+        suggested_classification="relevant",
+        suggested_extract_json='{"company_name": "Acme", "job_title": "Engineer", "status": "applied"}',
+        pipeline_run_id="run-1",
+    )
+
+    pending = repo.list_pending_review_suggestions(session)
+
+    assert len(pending) == 1
+    assert pending[0].status == "pending"
+
+
+def test_approve_new_application_suggestion_creates_application(session):
+    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    suggestion = repo.create_review_suggestion(
+        session,
+        message_id="msg-1",
+        action="new_application",
+        previous_classification="irrelevant",
+        suggested_classification="relevant",
+        suggested_extract_json='{"company_name": "Acme", "job_title": "Engineer", "status": "applied", "platform": "linkedin"}',
+        pipeline_run_id="run-1",
+    )
+
+    approved = repo.approve_review_suggestion(session, suggestion.id)
+
+    assert approved.status == "approved"
+    assert approved.reviewed_at is not None
+    application = repo.find_matching_application(session, "Acme", "Engineer", "linkedin")
+    assert application is not None
+    assert application.current_status == "applied"
+
+
+def test_approve_update_existing_suggestion_adds_status_event(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    suggestion = repo.create_review_suggestion(
+        session,
+        message_id="msg-1",
+        application_id=application.id,
+        action="update_existing",
+        previous_classification="relevant",
+        suggested_classification="relevant",
+        suggested_extract_json='{"company_name": "Acme", "job_title": "Engineer", "status": "rejected", "platform": "linkedin"}',
+        pipeline_run_id="run-1",
+    )
+
+    repo.approve_review_suggestion(session, suggestion.id)
+
+    session.refresh(application)
+    assert application.current_status == "rejected"
+
+
+def test_reject_review_suggestion_leaves_data_untouched(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    suggestion = repo.create_review_suggestion(
+        session,
+        message_id="msg-1",
+        application_id=application.id,
+        action="update_existing",
+        previous_classification="relevant",
+        suggested_classification="relevant",
+        suggested_extract_json='{"company_name": "Acme", "job_title": "Engineer", "status": "rejected", "platform": "linkedin"}',
+        pipeline_run_id="run-1",
+    )
+
+    rejected = repo.reject_review_suggestion(session, suggestion.id)
+
+    assert rejected.status == "rejected"
+    session.refresh(application)
+    assert application.current_status == "applied"
+
+
+def test_approve_reclassify_irrelevant_suggestion_makes_no_data_change(session):
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    suggestion = repo.create_review_suggestion(
+        session,
+        message_id="msg-1",
+        application_id=application.id,
+        action="reclassify_irrelevant",
+        previous_classification="relevant",
+        suggested_classification="irrelevant",
+        pipeline_run_id="run-1",
+    )
+
+    approved = repo.approve_review_suggestion(session, suggestion.id)
+
+    assert approved.status == "approved"
+    session.refresh(application)
+    assert application.current_status == "applied"

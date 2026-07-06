@@ -25,6 +25,7 @@ _PIPELINE_RUN_ADDITIVE_COLUMNS = {
     "emails_extracted": "INTEGER NOT NULL DEFAULT 0",
     "emails_written": "INTEGER NOT NULL DEFAULT 0",
     "updated_at": "DATETIME",
+    "run_type": "VARCHAR NOT NULL DEFAULT 'incremental'",
 }
 
 
