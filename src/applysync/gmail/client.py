@@ -4,6 +4,8 @@ import base64
 import html
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -161,13 +163,50 @@ class GmailClient:
             if not page_token:
                 break
 
-        emails: list[RawEmail] = []
-        for ref in refs[:max_results]:
-            full = (
-                self.service.users()
-                .messages()
-                .get(userId="me", id=ref["id"], format="full")
-                .execute()
-            )
-            emails.append(parse_message(full))
-        return emails
+        return self._fetch_message_bodies([ref["id"] for ref in refs[:max_results]])
+
+    def _fetch_message_bodies(self, message_ids: list[str]) -> list[RawEmail]:
+        """Fetch each message's full body concurrently. 10 workers is
+        deliberately conservative: the LLM's 40rpm rate limit is the real
+        bottleneck for a full sync, so faster fetching doesn't shorten
+        wall-clock time much - there is no benefit to pushing this higher.
+
+        A failed per-message fetch (network blip, transient error) is
+        logged and excluded rather than aborting the whole batch; it is
+        never marked processed, so it naturally gets retried next sync.
+        """
+
+        def fetch_one(message_id: str) -> RawEmail | None:
+            try:
+                service = self._service_for_current_thread()
+                full = (
+                    service.users().messages().get(userId="me", id=message_id, format="full").execute()
+                )
+                return parse_message(full)
+            except Exception:
+                logger.warning(
+                    "Failed to fetch message %s, skipping - will retry next sync",
+                    message_id,
+                    exc_info=True,
+                )
+                return None
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(fetch_one, message_ids))
+        return [email for email in results if email is not None]
+
+    def _service_for_current_thread(self):
+        """googleapiclient's underlying httplib2 transport is not documented
+        as safe to share across threads, so each worker thread gets its own
+        service instance built from the same credentials rather than
+        reusing self.service. Test doubles that preset self._service (no
+        real Settings) skip this and share the fake directly - thread
+        safety isn't a concern for a fake in-memory object.
+        """
+        if getattr(self, "_settings", None) is None:
+            return self.service
+        thread_local = self.__dict__.setdefault("_thread_local", threading.local())
+        if not hasattr(thread_local, "service"):
+            creds = load_credentials(self._settings)
+            thread_local.service = build("gmail", "v1", credentials=creds)
+        return thread_local.service
