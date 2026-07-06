@@ -7,10 +7,11 @@ from applysync.pipeline.nodes import (
     UNSPECIFIED_JOB_TITLE,
     make_classify_and_extract_node,
     make_match_node,
+    make_scrutinize_relevance_node,
     make_skip_node,
     make_upsert_node,
 )
-from applysync.pipeline.state import ClassifyAndExtractResult, JobApplicationEvent, MatchDecision
+from applysync.pipeline.state import ClassifyAndExtractResult, JobApplicationEvent, MatchDecision, RelevanceOnlyResult
 from tests.fakes import FakeExtractModel, FakeStructuredModel
 
 
@@ -23,6 +24,57 @@ def _email(sender="jobs@linkedin.com", subject="Your application was sent", body
         date="Wed, 1 Jul 2026 09:00:00 +0000",
         body=body,
     )
+
+
+# --- scrutinize_relevance ---
+
+
+def test_scrutinize_relevance_heuristic_pass_skips_llm_call():
+    node = make_scrutinize_relevance_node(
+        FakeExtractModel(FakeStructuredModel(exception=RuntimeError("should not be called"))), get_sources()
+    )
+
+    output = node({"email": _email(subject="Thank you for your application at Acme")})
+
+    assert output["scrutiny"] == "pass"
+
+
+def test_scrutinize_relevance_heuristic_reject_skips_llm_call():
+    node = make_scrutinize_relevance_node(
+        FakeExtractModel(FakeStructuredModel(exception=RuntimeError("should not be called"))), get_sources()
+    )
+
+    output = node({"email": _email(subject="New jobs matching your search")})
+
+    assert output["scrutiny"] == "reject"
+
+
+def test_scrutinize_relevance_ambiguous_case_calls_llm():
+    result = RelevanceOnlyResult(is_relevant=True)
+    node = make_scrutinize_relevance_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email(subject="Your application was sent")})
+
+    assert output["scrutiny"] == "pass"
+
+
+def test_scrutinize_relevance_ambiguous_case_llm_says_not_relevant():
+    result = RelevanceOnlyResult(is_relevant=False)
+    node = make_scrutinize_relevance_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email(subject="Your application was sent")})
+
+    assert output["scrutiny"] == "reject"
+
+
+def test_scrutinize_relevance_ambiguous_case_llm_failure_fails_open_to_pass():
+    node = make_scrutinize_relevance_node(
+        FakeExtractModel(FakeStructuredModel(exception=ValueError("boom"))), get_sources()
+    )
+
+    output = node({"email": _email(subject="Your application was sent")})
+
+    assert output["scrutiny"] == "pass"
 
 
 # --- classify_and_extract (merged) ---

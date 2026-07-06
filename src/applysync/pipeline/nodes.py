@@ -3,14 +3,22 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from typing import Literal
 
 from langchain_core.messages import HumanMessage
 from sqlmodel import Session
 
 from applysync.config import SourcesConfig
 from applysync.db import repository as repo
+from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import guess_platform
-from applysync.pipeline.state import ClassifyAndExtractResult, EmailState, JobApplicationEvent, MatchDecision
+from applysync.pipeline.state import (
+    ClassifyAndExtractResult,
+    EmailState,
+    JobApplicationEvent,
+    MatchDecision,
+    RelevanceOnlyResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +89,100 @@ Subject: {subject}
 
 Body:
 {body}"""
+
+
+# Strong negative markers seen in real job-alert/digest emails - these
+# arrived once the Gmail-side keyword filter was broadened to single words
+# (see config/sources.yaml), which otherwise let recommendation emails
+# through to the (LLM-rate-limited) classify_and_extract stage.
+_REJECT_MARKERS = [
+    "new jobs matching",
+    "jobs for you",
+    "recommended jobs",
+    "job alert",
+    "jobs you might like",
+    "weekly digest",
+    "similar jobs",
+    "boost your chances",
+    "unsubscribe from job alerts",
+]
+
+# The original, narrow confirmation phrases - reliable enough on their own
+# that scrutiny adds nothing for them. Kept as a fixed list here rather than
+# read from sources.yaml, since that file's confirmation_keywords now also
+# includes the broadened single-word terms this heuristic exists to
+# scrutinize; conflating the two would defeat the point.
+_NARROW_CONFIRMATION_PHRASES = [
+    "thank you for applying",
+    "thank you for your application",
+    "thank you for your interest in",
+    "application received",
+    "we have received your application",
+    "we've received your application",
+    "your application has been received",
+    "your application for",
+    "your application at",
+    "application submitted",
+    "successfully submitted",
+    "application confirmation",
+    "bewerbung",
+    "beworben",
+]
+
+
+def _heuristic_scrutinize(email: RawEmail) -> Literal["pass", "reject", "ambiguous"]:
+    subject_lower = email.subject.lower()
+    text = f"{subject_lower} {email.body[:500].lower()}"
+
+    if any(marker in text for marker in _REJECT_MARKERS):
+        return "reject"
+    if any(phrase in subject_lower for phrase in _NARROW_CONFIRMATION_PHRASES):
+        return "pass"
+    return "ambiguous"
+
+
+_RELEVANCE_ONLY_PROMPT = """Is this email about a job application the user personally submitted \
+(a confirmation, status update, interview invite, rejection, or offer) - as opposed to a job \
+alert digest, newsletter, or job recommendation email?
+
+From: {sender}
+Subject: {subject}
+
+Body (truncated):
+{body}"""
+
+
+def make_scrutinize_relevance_node(model, sources: SourcesConfig):
+    """Entry-point node: a heuristic pre-filter in front of the (rate-limited)
+    classify_and_extract call. Clear passes/rejects cost 0 extra LLM calls;
+    only the genuinely ambiguous middle bucket costs one cheap extra call -
+    this is what keeps a broadened Gmail-side keyword filter from
+    multiplying sync time by its false-positive rate.
+    """
+    structured_model = model.with_structured_output(RelevanceOnlyResult).with_retry(
+        stop_after_attempt=5, wait_exponential_jitter=True
+    )
+
+    def scrutinize_relevance(state: EmailState) -> dict:
+        email = state["email"]
+        heuristic = _heuristic_scrutinize(email)
+        if heuristic in ("pass", "reject"):
+            return {"scrutiny": heuristic}
+
+        prompt = _RELEVANCE_ONLY_PROMPT.format(
+            sender=email.sender, subject=email.subject, body=email.body[:1000]
+        )
+        try:
+            result = structured_model.invoke([HumanMessage(content=prompt)])
+        except Exception as exc:  # noqa: BLE001 - fail open, don't drop a possibly-real email
+            logger.warning(
+                "scrutiny LLM call failed for message %s, failing open (pass): %s", email.message_id, exc
+            )
+            return {"scrutiny": "pass"}
+
+        return {"scrutiny": "pass" if result.is_relevant else "reject"}
+
+    return scrutinize_relevance
 
 
 def make_classify_and_extract_node(model, sources: SourcesConfig):
