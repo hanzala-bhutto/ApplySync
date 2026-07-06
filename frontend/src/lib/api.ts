@@ -143,12 +143,18 @@ export interface PipelineRun {
   applications_created: number
   events_created: number
   errors: string | null
+  emails_total: number | null
+  emails_scrutinized: number
+  emails_extracted: number
+  emails_written: number
+  updated_at: string
 }
 
 export interface SyncStatus {
   in_progress: boolean
   last_error: string | null
   latest_run: PipelineRun | null
+  history: PipelineRun[]
 }
 
 export function getSyncStatus(): Promise<SyncStatus> {

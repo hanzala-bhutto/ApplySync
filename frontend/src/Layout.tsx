@@ -7,6 +7,7 @@ const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/reminders', label: 'Follow-Up' },
   { to: '/analytics', label: 'Analytics' },
+  { to: '/sync', label: 'Sync' },
 ]
 
 export function Layout({ children }: { children: ReactNode }) {
