@@ -3,7 +3,7 @@ from sqlmodel import select
 
 from applysync.config import get_sources
 from applysync.db import repository as repo
-from applysync.db.models import StatusEvent
+from applysync.db.models import ProcessedEmail, StatusEvent
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.graph import process_emails
 from applysync.pipeline.state import ClassifyAndExtractResult
@@ -152,6 +152,27 @@ def test_repeat_confirmation_emails_without_job_title_dedupe_to_one_application(
     ]
     assert len(events) == 2
     assert len({e.application_id for e in events}) == 1
+
+
+def test_scrutiny_rejected_email_never_reaches_classify_and_extract(session):
+    """A digest-marker subject should short-circuit at scrutinize_relevance
+    without ever invoking classify_and_extract - proven here by using a model
+    that raises if invoked at all.
+    """
+    model = FakeExtractModel(FakeStructuredModel(exception=RuntimeError("classify_and_extract must not run")))
+
+    stats = process_emails(
+        [_email(subject="New jobs matching your search - jobs for you this week")],
+        model=model,
+        session=session,
+        sources=get_sources(),
+        run_id="run-1",
+        checkpointer=MemorySaver(),
+    )
+
+    assert stats["applications_created"] == 0
+    processed = session.exec(select(ProcessedEmail).where(ProcessedEmail.message_id == "msg-1")).one()
+    assert processed.classification == "scrutiny_rejected"
 
 
 def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_application(session):

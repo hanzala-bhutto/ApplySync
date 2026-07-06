@@ -19,6 +19,7 @@ from applysync.llm import get_chat_model
 from applysync.pipeline.nodes import (
     make_classify_and_extract_node,
     make_match_node,
+    make_scrutinize_relevance_node,
     make_skip_node,
     make_upsert_node,
 )
@@ -34,9 +35,13 @@ def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) ->
     """
     graph = StateGraph(EmailState)
 
+    graph.add_node("scrutinize_relevance", make_scrutinize_relevance_node(model, sources))
     graph.add_node("classify_and_extract", make_classify_and_extract_node(model, sources))
     graph.add_node("match_existing_application", make_match_node(session))
     graph.add_node("upsert_db", make_upsert_node(session, run_id=run_id))
+    graph.add_node(
+        "mark_scrutiny_rejected", make_skip_node(session, run_id=run_id, classification="scrutiny_rejected")
+    )
     graph.add_node(
         "mark_irrelevant", make_skip_node(session, run_id=run_id, classification="irrelevant")
     )
@@ -45,7 +50,16 @@ def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) ->
         make_skip_node(session, run_id=run_id, classification="extraction_failed"),
     )
 
-    graph.set_entry_point("classify_and_extract")
+    graph.set_entry_point("scrutinize_relevance")
+
+    graph.add_conditional_edges(
+        "scrutinize_relevance",
+        lambda state: state.get("scrutiny"),
+        {
+            "pass": "classify_and_extract",
+            "reject": "mark_scrutiny_rejected",
+        },
+    )
 
     def _route(state):
         if state.get("extracted") is not None:
@@ -65,6 +79,7 @@ def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) ->
     )
     graph.add_edge("match_existing_application", "upsert_db")
     graph.add_edge("upsert_db", END)
+    graph.add_edge("mark_scrutiny_rejected", END)
     graph.add_edge("mark_irrelevant", END)
     graph.add_edge("mark_extraction_failed", END)
 

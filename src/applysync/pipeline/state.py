@@ -58,14 +58,29 @@ class MatchDecision(BaseModel):
     application_id: int | None = None
 
 
+class RelevanceOnlyResult(BaseModel):
+    """Structured-output schema for scrutinize_relevance's cheap ambiguous-case
+    LLM call - just a bool, not the full extraction schema, since this call
+    only needs to resolve a heuristic "maybe" into pass/reject.
+    """
+
+    is_relevant: bool = Field(
+        description="True if this email is about a job application the user personally "
+        "submitted (confirmation, status update, interview, rejection, offer). False for "
+        "job alert digests, newsletters, or job recommendation emails."
+    )
+
+
 class EmailState(TypedDict, total=False):
     """Per-email pipeline state. One EmailState flows through
-    classify_relevant -> extract_structured_data -> match_existing_application
-    -> upsert_db (or short-circuits to mark_irrelevant / mark_extraction_failed).
+    scrutinize_relevance -> classify_and_extract -> match_existing_application
+    -> upsert_db (or short-circuits to mark_scrutiny_rejected / mark_irrelevant /
+    mark_extraction_failed).
     """
 
     email: RawEmail
     platform_hint: str | None
+    scrutiny: Literal["pass", "reject"]
     classification: Literal["relevant", "irrelevant"]
     extracted: JobApplicationEvent | None
     match: MatchDecision | None
