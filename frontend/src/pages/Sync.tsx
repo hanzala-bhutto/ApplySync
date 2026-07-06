@@ -47,7 +47,7 @@ export function Sync() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sync-status'] }),
     onError: (error: Error) => {
       const message = error.message.includes('409')
-        ? 'A sync is already in progress.'
+        ? 'A sync or full scan is already in progress.'
         : 'Could not start full scan.'
       showToast({ message, variant: 'error' })
     },

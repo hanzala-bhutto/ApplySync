@@ -31,7 +31,7 @@ test('review page shows a message when nothing is pending', async ({ page }) => 
 })
 
 test('review page shows a new-application suggestion with its suggested fields', async ({ page }) => {
-  await page.route('**/api/review-suggestions*', async (route) => {
+  await page.route('**/api/review-suggestions', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({ json: [suggestion()] })
       return
@@ -46,7 +46,7 @@ test('review page shows a new-application suggestion with its suggested fields',
 })
 
 test('review page shows a before/after diff for an update-existing suggestion', async ({ page }) => {
-  await page.route('**/api/review-suggestions*', async (route) => {
+  await page.route('**/api/review-suggestions', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({
         json: [
@@ -71,7 +71,7 @@ test('review page shows a before/after diff for an update-existing suggestion', 
 
 test('approving a suggestion removes it from the list and shows a toast', async ({ page }) => {
   let approved = false
-  await page.route('**/api/review-suggestions*', async (route) => {
+  await page.route('**/api/review-suggestions', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({ json: approved ? [] : [suggestion()] })
       return
@@ -94,7 +94,7 @@ test('approving a suggestion removes it from the list and shows a toast', async 
 
 test('rejecting a suggestion removes it from the list and shows a toast', async ({ page }) => {
   let rejected = false
-  await page.route('**/api/review-suggestions*', async (route) => {
+  await page.route('**/api/review-suggestions', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({ json: rejected ? [] : [suggestion()] })
       return
@@ -114,7 +114,7 @@ test('rejecting a suggestion removes it from the list and shows a toast', async 
 })
 
 test('review page has no detectable accessibility violations', async ({ page }) => {
-  await page.route('**/api/review-suggestions*', async (route) => {
+  await page.route('**/api/review-suggestions', async (route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({ json: [suggestion(), suggestion({ id: 2, action: 'reclassify_irrelevant' })] })
       return

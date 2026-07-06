@@ -76,7 +76,7 @@ export async function mockApi(page: Page) {
   })
 
   // No pending suggestions by default - tests for the Review page override this themselves.
-  await page.route('**/api/review-suggestions*', async (route) => {
+  await page.route('**/api/review-suggestions', async (route) => {
     await route.fulfill({ json: [] })
   })
 
