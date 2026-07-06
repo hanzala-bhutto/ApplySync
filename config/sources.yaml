@@ -14,11 +14,25 @@ confirmation_keywords:
   - "we've received your application"
   - "your application has been received"
   - "your application for"
+  - "your application at"
   - "application submitted"
   - "successfully submitted"
   - "application confirmation"
   - bewerbung
   - beworben
+  - application
+  - applying
+  - applied
+  - candidacy
+  - interview
+  - interviewing
+  - vorstellungsgespräch
+  - assessment
+  - offer
+  - rejected
+  - rejection
+  - declined
+  - absage
 
 # Known senders, used only for best-effort platform attribution (labeling
 # in the dashboard) once a message is already confirmed relevant by

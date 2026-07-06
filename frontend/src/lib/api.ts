@@ -133,3 +133,28 @@ export function gmailConnectUrl(returnTo: string): string {
   const params = new URLSearchParams({ return_to: returnTo })
   return `${API_BASE}/api/gmail/connect?${params.toString()}`
 }
+
+export interface PipelineRun {
+  id: string
+  started_at: string
+  finished_at: string | null
+  emails_fetched: number
+  emails_relevant: number
+  applications_created: number
+  events_created: number
+  errors: string | null
+}
+
+export interface SyncStatus {
+  in_progress: boolean
+  last_error: string | null
+  latest_run: PipelineRun | null
+}
+
+export function getSyncStatus(): Promise<SyncStatus> {
+  return request('/api/sync/status')
+}
+
+export function postSync(): Promise<{ status: string }> {
+  return request('/api/sync', { method: 'POST' })
+}

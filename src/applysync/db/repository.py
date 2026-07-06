@@ -333,6 +333,14 @@ def create_pipeline_run(session: Session, run_id: str) -> PipelineRun:
     return run
 
 
+def get_latest_pipeline_run(session: Session) -> PipelineRun | None:
+    """Most recent run regardless of whether it finished, so the dashboard's
+    sync status can reflect one still in progress, not just completed ones.
+    """
+    statement = select(PipelineRun).order_by(PipelineRun.started_at.desc())
+    return session.exec(statement).first()
+
+
 def last_successful_run_started_at(session: Session) -> datetime | None:
     """Bounds the Gmail query for subsequent syncs (build_search_query's
     `after` param) so a caught-up inbox doesn't re-scan its entire history
