@@ -20,6 +20,19 @@ confirmation_keywords:
   - "application confirmation"
   - bewerbung
   - beworben
+  - application
+  - applying
+  - applied
+  - candidacy
+  - interview
+  - interviewing
+  - vorstellungsgespräch
+  - assessment
+  - offer
+  - rejected
+  - rejection
+  - declined
+  - absage
 
 # Known senders, used only for best-effort platform attribution (labeling
 # in the dashboard) once a message is already confirmed relevant by

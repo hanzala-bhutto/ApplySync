@@ -25,6 +25,13 @@ def test_build_search_query_omits_after_bound_when_not_given():
     assert "after:" not in query
 
 
+def test_build_search_query_includes_broadened_single_word_keywords():
+    query = build_search_query(get_sources())
+    assert "subject:applied" in query
+    assert "subject:rejected" in query
+    assert "subject:interview" in query
+
+
 def test_guess_platform_matches_known_domain():
     assert guess_platform("jobs-noreply@linkedin.com", get_sources()) == "linkedin"
 
