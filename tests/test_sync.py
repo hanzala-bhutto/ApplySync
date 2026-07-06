@@ -83,6 +83,9 @@ def test_latest_pipeline_run_reflected_in_status(client):
     from applysync.db import repository as repo
 
     run = repo.create_pipeline_run(client.db_session, "run-xyz")
+    repo.update_pipeline_run_progress(
+        client.db_session, run.id, emails_total=3, emails_scrutinized=3, emails_extracted=2, emails_written=2
+    )
     repo.finish_pipeline_run(
         client.db_session,
         run.id,
@@ -96,3 +99,7 @@ def test_latest_pipeline_run_reflected_in_status(client):
     assert status["latest_run"]["id"] == "run-xyz"
     assert status["latest_run"]["emails_fetched"] == 3
     assert status["latest_run"]["finished_at"] is not None
+    assert status["latest_run"]["emails_total"] == 3
+    assert status["latest_run"]["emails_scrutinized"] == 3
+    assert status["latest_run"]["emails_extracted"] == 2
+    assert status["latest_run"]["emails_written"] == 2
