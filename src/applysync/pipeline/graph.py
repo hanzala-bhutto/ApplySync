@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from langgraph.graph import END, StateGraph
@@ -133,6 +133,19 @@ def process_emails(
     }
 
 
+# Extra lookback beyond the last run's own date, applied on top of the
+# same-day overlap `last_successful_run_started_at` already gives (Gmail's
+# after: operator is date-, not time-, granularity). Found necessary for
+# real: two manual test syncs completed (0 emails found, but still
+# "successful") just after midnight, which advanced the bookmark to that new
+# calendar day - permanently excluding a real email from just before
+# midnight the day before that a confirmation_keywords gap had also caused
+# to be missed. processed_emails already dedupes anything re-fetched in this
+# wider window, so the buffer costs a slightly larger Gmail query, not
+# reprocessing.
+SYNC_LOOKBACK_BUFFER_DAYS = 3
+
+
 def run_sync(settings: Settings | None = None) -> dict:
     """Real end-to-end entrypoint (applysync sync): fetches from the actual
     Gmail API and an actual LLM, unlike process_emails which is exercised
@@ -149,7 +162,12 @@ def run_sync(settings: Settings | None = None) -> dict:
         model = get_chat_model(settings)
         client = GmailClient(settings)
         last_run_started_at = repo.last_successful_run_started_at(session)
-        query = build_search_query(sources, after=last_run_started_at.date() if last_run_started_at else None)
+        after_date = (
+            last_run_started_at.date() - timedelta(days=SYNC_LOOKBACK_BUFFER_DAYS)
+            if last_run_started_at
+            else None
+        )
+        query = build_search_query(sources, after=after_date)
         emails = client.fetch_messages(query)
 
         checkpointer = make_checkpointer(settings.db_path)

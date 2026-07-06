@@ -532,6 +532,37 @@ scripts/gmail_probe.py
       polls `/api/sync/status` every 1.5s only while `in_progress` (not
       constantly), and toasts the outcome (stats on success, the error
       message on failure) the moment it flips back to not-in-progress.
+
+      Also fixed a UX/accessibility inconsistency found while reviewing this
+      addition against the project's established mutation-feedback rules:
+      the sync failure toast showed the raw backend exception text instead
+      of a plain-language message (now generic, matching every other
+      mutation's error toast), and every real `<button>` app-wide was
+      missing `cursor-pointer` (Tailwind v4's preflight doesn't add it, so
+      native buttons show the plain arrow cursor, not a hand) - fixed
+      everywhere, not just the new button, for consistency.
+
+      Two more real bugs found by actually clicking "Sync Now" against the
+      real inbox (not caught by mocked tests, since those never exercise a
+      real Gmail query or real keyword coverage): (1) a real rejection email
+      ("Your application at dexter health") wasn't fetched at all - the
+      Gmail search is subject-only, and its subject didn't match any
+      `confirmation_keywords` phrase (closest was `"your application for"`,
+      but this one said "at"). Added `"your application at"` to
+      `config/sources.yaml`. (2) Fixing (1) alone wasn't enough: the two
+      zero-result manual syncs run while testing this feature still
+      completed "successfully" (0 emails found, but `finished_at` got set),
+      which advanced `last_successful_run_started_at` to that day. Since
+      Gmail's `after:` filter is date-only, the next sync would have used
+      `after:` today's date, permanently excluding the July 5 email even
+      after the keyword fix - a run that finds nothing still moves the
+      incremental bookmark forward, and once a date is passed, anything
+      before it is unreachable regardless of keyword coverage. Fixed by
+      adding `SYNC_LOOKBACK_BUFFER_DAYS = 3` in `graph.py`, subtracted from
+      the last run's date on top of the existing same-day overlap - cheap
+      (the `processed_emails` idempotency table already dedupes anything
+      re-fetched in the wider window), and closes this whole class of edge
+      case rather than just the one instance.
 - [ ] M4: Scheduler/automation - explicitly NOT the same as the manual
       button above: the user pointed out that an in-process APScheduler tied
       to the FastAPI app (the original plan) only ticks while `applysync
