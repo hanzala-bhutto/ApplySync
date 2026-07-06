@@ -52,22 +52,6 @@ test('sync page shows stage progress bars and counts for the latest run', async 
   await expect(page.getByText(/2 new, 2 updates from 3 relevant emails/)).toBeVisible()
 })
 
-test('sync page triggers a sync from its own button, same as the header widget', async ({ page }) => {
-  let posted = false
-  await page.route('**/api/sync', async (route) => {
-    if (route.request().method() === 'POST') {
-      posted = true
-      await route.fulfill({ status: 202, json: { status: 'started' } })
-      return
-    }
-    await route.continue()
-  })
-
-  await page.goto('/sync')
-  await page.locator('#main-content').getByRole('button', { name: 'Sync Now' }).click()
-  await expect.poll(() => posted).toBe(true)
-})
-
 test('sync page lists recent run history', async ({ page }) => {
   await page.route('**/api/sync/status*', async (route) => {
     await route.fulfill({

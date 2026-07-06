@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getSyncStatus, postFullScan, type PipelineRun } from '../lib/api'
-import { SyncButton } from '../components/SyncButton'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useToast } from '../lib/toast'
 
@@ -74,10 +73,7 @@ export function Sync() {
 
   return (
     <div>
-      <div className="mb-4 flex items-baseline justify-between">
-        <h1 className="text-xl font-bold tracking-tight">Sync</h1>
-        <SyncButton />
-      </div>
+      <h1 className="mb-4 text-xl font-bold tracking-tight">Sync</h1>
 
       <div
         aria-live="polite"
