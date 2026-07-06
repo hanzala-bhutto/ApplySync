@@ -28,10 +28,12 @@ class FakeMessagesResource:
     across list() calls the way the real API does with nextPageToken.
     """
 
-    def __init__(self, all_ids: list[str], page_size: int = 2):
+    def __init__(self, all_ids: list[str], page_size: int = 2, fail_ids: set[str] | None = None):
         self._all_ids = all_ids
         self._page_size = page_size
+        self._fail_ids = fail_ids or set()
         self.list_call_count = 0
+        self.get_call_count = 0
 
     def list(self, userId, q, maxResults, pageToken=None):
         self.list_call_count += 1
@@ -44,6 +46,9 @@ class FakeMessagesResource:
         return _Executable(response)
 
     def get(self, userId, id, format):
+        self.get_call_count += 1
+        if id in self._fail_ids:
+            return _FailingExecutable(id)
         return _Executable(_message(id))
 
 
@@ -55,9 +60,17 @@ class _Executable:
         return self._value
 
 
+class _FailingExecutable:
+    def __init__(self, message_id: str):
+        self._message_id = message_id
+
+    def execute(self):
+        raise RuntimeError(f"simulated transient failure fetching {self._message_id}")
+
+
 class FakeGmailService:
-    def __init__(self, all_ids: list[str], page_size: int = 2):
-        self.messages_resource = FakeMessagesResource(all_ids, page_size=page_size)
+    def __init__(self, all_ids: list[str], page_size: int = 2, fail_ids: set[str] | None = None):
+        self.messages_resource = FakeMessagesResource(all_ids, page_size=page_size, fail_ids=fail_ids)
 
     def users(self):
         return self
@@ -66,9 +79,11 @@ class FakeGmailService:
         return self.messages_resource
 
 
-def _client_with_fake_service(all_ids: list[str], page_size: int = 2) -> GmailClient:
+def _client_with_fake_service(
+    all_ids: list[str], page_size: int = 2, fail_ids: set[str] | None = None
+) -> GmailClient:
     client = GmailClient.__new__(GmailClient)  # bypass __init__, no real settings/OAuth needed
-    fake_service = FakeGmailService(all_ids, page_size=page_size)
+    fake_service = FakeGmailService(all_ids, page_size=page_size, fail_ids=fail_ids)
     client._service = fake_service
     return client
 
@@ -100,3 +115,24 @@ def test_fetch_messages_returns_all_when_fewer_than_max_results():
     emails = client.fetch_messages("query", max_results=500)
 
     assert len(emails) == 3
+
+
+def test_fetch_messages_fetches_bodies_concurrently_preserving_order():
+    all_ids = [f"msg-{i}" for i in range(20)]
+    client = _client_with_fake_service(all_ids, page_size=5)
+
+    emails = client.fetch_messages("query", max_results=500)
+
+    assert [e.message_id for e in emails] == all_ids
+    assert client.service.messages_resource.get_call_count == 20
+
+
+def test_fetch_messages_skips_failed_fetch_without_aborting_batch():
+    all_ids = [f"msg-{i}" for i in range(10)]
+    client = _client_with_fake_service(all_ids, page_size=5, fail_ids={"msg-4"})
+
+    emails = client.fetch_messages("query", max_results=500)
+
+    returned_ids = {e.message_id for e in emails}
+    assert returned_ids == set(all_ids) - {"msg-4"}
+    assert len(emails) == 9
