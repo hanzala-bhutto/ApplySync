@@ -75,6 +75,12 @@ class PipelineRun(SQLModel, table=True):
     emails_extracted: int = 0
     emails_written: int = 0
     updated_at: datetime = Field(default_factory=_utcnow)
+    # Only meaningful for run_type="full_scan" (always 0 for an incremental
+    # sync, which never creates suggestions) - a full scan never auto-applies
+    # anything, so this is the number that actually answers "did this run
+    # find anything worth looking at", not applications_created/events_created
+    # which are always 0 for a full scan by design.
+    suggestions_created: int = 0
     # "incremental" (normal Sync Now / applysync sync) or "full_scan" (see
     # ReviewSuggestion below) - lets the /sync page's shared progress-bar UI
     # distinguish which kind of run is in flight.

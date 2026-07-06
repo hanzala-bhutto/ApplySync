@@ -42,6 +42,7 @@ def test_full_scan_suggests_new_application_when_previously_irrelevant_now_relev
     stats = process_full_scan([_email()], model=model, session=session, sources=get_sources(), run_id=run_id)
 
     assert stats["suggestions_created"] == 1
+    assert stats["emails_relevant"] == 1
     suggestion = session.exec(select(ReviewSuggestion)).one()
     assert suggestion.action == "new_application"
     assert suggestion.application_id is None
@@ -202,6 +203,32 @@ def test_full_scan_creates_no_suggestion_when_still_not_relevant(session):
 
     assert stats["suggestions_created"] == 0
     assert session.exec(select(ReviewSuggestion)).all() == []
+
+
+def test_full_scan_emails_relevant_excludes_attempted_but_irrelevant_extractions(session):
+    """Regression test: emails_relevant used to just reuse emails_extracted
+    (count of emails where extraction was attempted), conflating "scrutiny
+    let it through" with "genuinely a real application email" - an email
+    can pass scrutiny (heuristic or LLM) and still come back irrelevant from
+    classify_and_extract itself.
+    """
+    repo.mark_processed(session, "msg-1", classification="irrelevant", pipeline_run_id="old-run")
+    run_id = _run(session)
+    # Narrow confirmation phrase -> heuristic scrutiny passes immediately
+    # (no ambiguous-case LLM call), so is_relevant=False here reflects
+    # classify_and_extract's own verdict, not the scrutiny node's.
+    model = _model(is_relevant=False)
+
+    stats = process_full_scan(
+        [_email(subject="Thank you for your application at Acme")],
+        model=model,
+        session=session,
+        sources=get_sources(),
+        run_id=run_id,
+    )
+
+    assert stats["emails_relevant"] == 0
+    assert stats["suggestions_created"] == 0
 
 
 def test_full_scan_tracks_progress_on_pipeline_run(session):

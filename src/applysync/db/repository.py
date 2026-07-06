@@ -406,6 +406,7 @@ def finish_pipeline_run(
     applications_created: int,
     events_created: int,
     errors: str | None = None,
+    suggestions_created: int = 0,
 ) -> PipelineRun:
     run = session.get(PipelineRun, run_id)
     if run is None:
@@ -416,6 +417,7 @@ def finish_pipeline_run(
     run.applications_created = applications_created
     run.events_created = events_created
     run.errors = errors
+    run.suggestions_created = suggestions_created
     session.add(run)
     session.commit()
     session.refresh(run)

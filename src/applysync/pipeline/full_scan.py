@@ -71,6 +71,7 @@ def process_full_scan(
 
     emails_scrutinized = 0
     emails_extracted = 0
+    emails_relevant = 0
     emails_written = 0
     suggestions_created = 0
 
@@ -88,6 +89,8 @@ def process_full_scan(
             emails_extracted += 1
             new_extracted = extract_result.get("extracted")
             platform_hint = extract_result.get("platform_hint")
+            if new_extracted is not None:
+                emails_relevant += 1
         else:
             platform_hint = guess_platform(email.sender, sources)
 
@@ -143,7 +146,7 @@ def process_full_scan(
 
     return {
         "emails_fetched": len(emails),
-        "emails_relevant": emails_extracted,
+        "emails_relevant": emails_relevant,
         "applications_created": 0,
         "events_created": 0,
         "suggestions_created": suggestions_created,
@@ -179,5 +182,6 @@ def full_scan(settings: Settings | None = None) -> dict:
             emails_relevant=stats["emails_relevant"],
             applications_created=stats["applications_created"],
             events_created=stats["events_created"],
+            suggestions_created=stats["suggestions_created"],
         )
         return {"run_id": run_id, **stats}

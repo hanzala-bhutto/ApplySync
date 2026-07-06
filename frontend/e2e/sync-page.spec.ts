@@ -18,6 +18,7 @@ function pipelineRun(overrides: Partial<Record<string, unknown>> = {}) {
     emails_written: 3,
     updated_at: '2026-01-15T10:01:00Z',
     run_type: 'incremental',
+    suggestions_created: 0,
     ...overrides,
   }
 }
@@ -137,4 +138,42 @@ test('sync page labels progress by the in-progress run type', async ({ page }) =
 
   await page.goto('/sync')
   await expect(page.getByText('Full scan in progress...')).toBeVisible()
+})
+
+test('sync page shows suggestion count for a finished full scan, not the always-zero application/event counts', async ({ page }) => {
+  await page.route('**/api/sync/status*', async (route) => {
+    await route.fulfill({
+      json: {
+        in_progress: false,
+        last_error: null,
+        current_run_type: null,
+        latest_run: pipelineRun({ run_type: 'full_scan', suggestions_created: 3, emails_relevant: 10 }),
+        history: [],
+      },
+    })
+  })
+
+  await page.goto('/sync')
+  await expect(page.getByText(/3 suggestions queued for/)).toBeVisible()
+  await expect(page.locator('#main-content').getByRole('link', { name: 'review' })).toHaveAttribute(
+    'href',
+    '/review'
+  )
+})
+
+test('sync page shows a clean-scan message when a full scan finds nothing to review', async ({ page }) => {
+  await page.route('**/api/sync/status*', async (route) => {
+    await route.fulfill({
+      json: {
+        in_progress: false,
+        last_error: null,
+        current_run_type: null,
+        latest_run: pipelineRun({ run_type: 'full_scan', suggestions_created: 0, emails_relevant: 10 }),
+        history: [],
+      },
+    })
+  })
+
+  await page.goto('/sync')
+  await expect(page.getByText('nothing needed review.')).toBeVisible()
 })

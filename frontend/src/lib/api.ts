@@ -149,6 +149,7 @@ export interface PipelineRun {
   emails_written: number
   updated_at: string
   run_type: 'incremental' | 'full_scan'
+  suggestions_created: number
 }
 
 export interface SyncStatus {
