@@ -70,7 +70,7 @@ export async function mockApi(page: Page) {
   // Idle by default (never synced) - tests that care about an in-progress or
   // just-finished sync override this route themselves.
   await page.route('**/api/sync/status*', async (route) => {
-    await route.fulfill({ json: { in_progress: false, last_error: null, latest_run: null } })
+    await route.fulfill({ json: { in_progress: false, last_error: null, latest_run: null, history: [] } })
   })
 
   await page.route('**/api/reminders*', async (route) => {

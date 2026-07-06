@@ -23,7 +23,7 @@ def test_sync_status_when_never_run(client):
     response = client.get("/api/sync/status")
     assert response.status_code == 200
     body = response.json()
-    assert body == {"in_progress": False, "last_error": None, "latest_run": None}
+    assert body == {"in_progress": False, "last_error": None, "latest_run": None, "history": []}
 
 
 def test_start_sync_runs_in_background_and_reports_completion(client):
@@ -103,3 +103,23 @@ def test_latest_pipeline_run_reflected_in_status(client):
     assert status["latest_run"]["emails_scrutinized"] == 3
     assert status["latest_run"]["emails_extracted"] == 2
     assert status["latest_run"]["emails_written"] == 2
+
+
+def test_sync_status_includes_recent_run_history(client):
+    _reset_state()
+    from applysync.db import repository as repo
+
+    for i in range(3):
+        run = repo.create_pipeline_run(client.db_session, f"run-{i}")
+        repo.finish_pipeline_run(
+            client.db_session,
+            run.id,
+            emails_fetched=1,
+            emails_relevant=1,
+            applications_created=1,
+            events_created=1,
+        )
+
+    status = client.get("/api/sync/status").json()
+    assert len(status["history"]) == 3
+    assert {run["id"] for run in status["history"]} == {"run-0", "run-1", "run-2"}

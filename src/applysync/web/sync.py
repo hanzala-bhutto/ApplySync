@@ -24,6 +24,7 @@ class SyncStatusResponse(BaseModel):
     in_progress: bool
     last_error: str | None
     latest_run: PipelineRun | None
+    history: list[PipelineRun]
 
 
 class SyncStartResponse(BaseModel):
@@ -77,6 +78,7 @@ def register_sync_routes(app, *, get_session, get_settings, get_run_sync=get_run
             "in_progress": _state["in_progress"],
             "last_error": _state["last_error"],
             "latest_run": repo.get_latest_pipeline_run(session),
+            "history": repo.list_recent_pipeline_runs(session, limit=10),
         }
 
     app.include_router(router)
