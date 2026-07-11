@@ -57,7 +57,7 @@ global skill's job.
 
 ## Config-driven platform list
 
-- If a new platform was added, was it added to `config/sources.yaml` rather
+- If a new platform was added, was it added to `backend/config/sources.yaml` rather
   than as new parsing/scraping code? New per-platform *code* (beyond config)
   is a sign the "LLM extraction over per-platform parsers" principle is being
   violated, flag it.

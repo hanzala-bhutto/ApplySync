@@ -16,7 +16,7 @@ reciting documentation.
    "conditional edges", "checkpointing", "tracing", "multi-agent
    orchestration", "state graphs", "tool calling").
 2. Find where it is *actually used* in this codebase, grep
-   `src/applysync/` for the relevant construct (e.g. `with_structured_output`,
+   `backend/applysync/` for the relevant construct (e.g. `with_structured_output`,
    `add_conditional_edges`, `SqliteSaver`, `StateGraph`). If the code doesn't
    exist yet (early milestones), say so plainly and explain the concept
    against the *planned* usage from `CLAUDE.md` instead, don't pretend code
