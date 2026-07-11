@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     gmail_token_path: Path = Path(".secrets/token.json")
     db_path: Path = Path("applysync.db")
     sync_interval_minutes: int = 20
+    # Base URL of the self-hosted SearXNG instance (see searxng/docker-compose.yml)
+    # that powers the web-research features. Local, keyless, no external account.
+    searxng_url: str = "http://localhost:8888"
 
     # Relative paths in .env (the default for all three above) must resolve
     # against the project root, not whatever directory the process happens

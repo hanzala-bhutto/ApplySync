@@ -1,0 +1,25 @@
+# SearXNG configuration for ApplySync's self-hosted web-search layer.
+#
+# use_default_settings merges these overrides onto SearXNG's shipped defaults,
+# so we only have to specify what differs from stock.
+use_default_settings: true
+
+server:
+  # Session-signing key for this LOCAL instance only. This is NOT a credential
+  # to any external service and the instance is not internet-exposed (it binds
+  # to localhost via docker-compose). Regenerate with:
+  #   python -c "import secrets; print(secrets.token_hex(32))"
+  secret_key: "6cbfeefaee738cdf30c5ef659232ec00a477dccde07e66b384921885dda5c857"
+  # The bot-detection limiter needs Redis and blocks programmatic (non-browser)
+  # requests, which is exactly what our search client makes. Off for a single-
+  # user local tool means we don't need a Redis sidecar at all.
+  limiter: false
+
+search:
+  # Enable the JSON response format. Stock SearXNG serves HTML only; our client
+  # queries /search?format=json, which 403s unless json is listed here.
+  formats:
+    - html
+    - json
+  # Bias results toward English by default; callers can still override per query.
+  default_lang: "en"

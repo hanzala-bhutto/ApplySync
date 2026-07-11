@@ -99,6 +99,7 @@ Following one email through the system, function by function:
 - A Gmail account you apply for jobs from
 - A Google Cloud project with the Gmail API enabled and OAuth credentials
 - A free [NVIDIA API key](https://build.nvidia.com/) for the LLM calls
+- (Optional) Docker, only if you want the self-hosted web-search layer (see [Web search](#web-search-optional) below) that will power the upcoming company-research features
 
 ### Installation
 
@@ -135,6 +136,25 @@ cd frontend
 npm install
 ```
 
+### Web search (optional)
+
+The company-research features (research card, follow-up drafting, entity resolution, and more - see [Roadmap](#roadmap)) get live web results from a self-hosted [SearXNG](https://github.com/searxng/searxng) instance. It is deliberately self-hosted and keyless: no external account, no paid API, no third party seeing your queries, matching this project's local-first design. Everything else works without it; only the research features need it.
+
+Start it in its own terminal (Docker must be running):
+
+```
+cd searxng
+docker compose up -d
+```
+
+That brings up SearXNG on `http://localhost:8888` (the default `SEARXNG_URL` in `.env`). Verify it end to end:
+
+```
+applysync search "egym careers"
+```
+
+The bundled `searxng/settings.yml` enables SearXNG's JSON API and disables the bot-detection limiter (so no Redis sidecar is needed) - both required for programmatic access from a single-user local tool. It ships with a generated `secret_key`; that key only signs this local instance's own sessions and is not a credential to anything external, but you can regenerate it (the file says how) if you prefer.
+
 ### Usage
 
 Run one pass of the ingestion and extraction pipeline from the CLI:
@@ -165,6 +185,8 @@ Both `applysync sync` and a dashboard-triggered sync fetch new application-relat
 - [x] React dashboard: status board with drag-and-drop, per-application timeline with source-email verification, inline editing, reprocess action, follow-up reminders, per-platform analytics, and a staged sync-progress page
 - [x] Pipeline redesign (broadened keyword coverage, a scrutiny node ahead of extraction, and staged sync progress) - real-inbox verification of the broadened filter is still outstanding
 - [ ] Scheduler: automatic periodic syncing independent of whether the dashboard/server is running (planned as an OS-level scheduled task, not an in-process one)
+- [x] Self-hosted, keyless web-search layer (SearXNG) as the foundation for the research features below
+- [ ] Web-research features on top of it: company-research card, follow-up "should I chase this + warm draft", duplicate/entity resolution, company-alias canonicalization, and an interview-prep dossier
 - [ ] Observability: LangSmith and Langfuse tracing, plus a hand-labeled evaluation set for extraction accuracy
 
 Full milestone detail, including the reasoning behind each decision, lives in `CLAUDE.md`.
