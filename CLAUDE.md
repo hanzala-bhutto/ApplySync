@@ -7,14 +7,17 @@ job-application data (company, title, platform, status) from application
 confirmation emails, and persists it to a local SQLite database viewable in a
 small web dashboard.
 
-Two purposes, both load-bearing, don't optimize away either one:
-1. **Real utility**: one place to see every application and its status, instead
-   of scattered platform inboxes.
-2. **Learning vehicle**: the user is learning LangChain, LangChain Community,
-   LangGraph, LangSmith, Langfuse, and agentic/multi-agent orchestration by
-   building this. Prefer designs that make concepts legible (distinct
-   nodes/agents with clear responsibilities) over the shortest path to working
-   code.
+The goal is one place to see every application and its status, instead of
+scattered platform inboxes, plus the web-research capabilities layered on top
+(company research, follow-up drafting, entity resolution) that make it more than
+a passive inbox reader.
+
+**Design principle**: prefer distinct nodes/agents with clear, single
+responsibilities over the shortest path to working code. This is not gold-
+plating - the codebase's own history (per-node bugs like the EGYM dedupe, the
+job-title placeholder hallucination, the lookback-buffer edge case) shows a
+pipeline built from small, legible, independently-testable stages is far easier
+to debug and extend than one monolithic call. Keep it that way.
 
 Full design rationale lives in the plan this was built from:
 `C:\Users\Hp\.claude\plans\i-want-to-learn-floating-mitten.md` (not part of

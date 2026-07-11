@@ -17,7 +17,7 @@ An email-driven job application tracker that pulls your applications out of your
 
 ## Motivation
 
-Job hunting across LinkedIn, Indeed, StepStone, direct company career pages, and whatever new AI recruiting tool shows up this month means your application history ends up scattered across a dozen inboxes and a pile of manually named folders. There is no single place that answers a simple question: which companies have I actually applied to, and what happened next? ApplySync starts from an observation: almost every application you submit generates a confirmation or status email somewhere, whether from LinkedIn, an ATS vendor like SmartRecruiters or Personio, or the company itself. Instead of building a scraper for every platform (a losing battle the moment any of them changes their HTML), ApplySync reads those emails directly and uses an LLM to pull out the structured facts: company, role, status, platform. New platforms and ATS vendors need a config change, not new code. This project is also a deliberate learning vehicle: it is being built hands-on to learn LangChain, LangChain Community, LangGraph, LangSmith, Langfuse, and the broader practice of agentic/multi-agent orchestration, by shipping something the author actually uses every day to track a real job search rather than a toy demo.
+Job hunting across LinkedIn, Indeed, StepStone, direct company career pages, and whatever new AI recruiting tool shows up this month means your application history ends up scattered across a dozen inboxes and a pile of manually named folders. There is no single place that answers a simple question: which companies have I actually applied to, and what happened next? ApplySync starts from an observation: almost every application you submit generates a confirmation or status email somewhere, whether from LinkedIn, an ATS vendor like SmartRecruiters or Personio, or the company itself. Instead of building a scraper for every platform (a losing battle the moment any of them changes their HTML), ApplySync reads those emails directly and uses an LLM to pull out the structured facts: company, role, status, platform. New platforms and ATS vendors need a config change, not new code. On top of that extraction pipeline, ApplySync layers self-hosted, keyless web-research capabilities (company research, follow-up drafting, entity resolution) that turn it from a passive inbox reader into an active research assistant for your job search. The author uses it every day to track a real one.
 
 ## Tech Stack
 
@@ -193,7 +193,7 @@ Full milestone detail, including the reasoning behind each decision, lives in `C
 
 ## Contributing
 
-This started as a personal tool and learning project, but issues and pull requests are welcome. If you are adding support for a new job platform or ATS vendor, it almost certainly belongs in `backend/config/sources.yaml`, not as new parsing code - that separation is a deliberate design constraint, see `CLAUDE.md` for why.
+This is a personal, self-hosted tool, but issues and pull requests are welcome. If you are adding support for a new job platform or ATS vendor, it almost certainly belongs in `backend/config/sources.yaml`, not as new parsing code - that separation is a deliberate design constraint, see `CLAUDE.md` for why.
 
 ## License
 
@@ -203,4 +203,4 @@ Released under the [MIT License](LICENSE).
 
 - [NVIDIA](https://build.nvidia.com/) for free access to the Nemotron model family used for extraction
 - The [LangChain and LangGraph](https://www.langchain.com/) teams and community
-- Built with the help of [Claude Code](https://claude.com/claude-code) as a pair-programming and learning partner throughout
+- Built with the help of [Claude Code](https://claude.com/claude-code) as a pair-programming partner throughout
