@@ -44,7 +44,7 @@ OAuth client, independent of any Claude Code session.
      This redirects to Google's consent screen and back to a backend
      callback route (`GET /api/gmail/callback`), which writes `token.json`
      itself - no terminal involved.
-   - **From the CLI** (for `scripts/gmail_probe.py` or before the web app
+   - **From the CLI** (for `backend/scripts/gmail_probe.py` or before the web app
      exists): running the app's Gmail-connecting command (e.g. `applysync
      sync`) for the first time opens a local browser consent prompt directly
      (`InstalledAppFlow.run_local_server`).

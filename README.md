@@ -36,7 +36,7 @@ Job hunting across LinkedIn, Indeed, StepStone, direct company career pages, and
 What is actually working today:
 
 - **Gmail ingestion** with a readonly OAuth flow (never write or send scopes), either via the CLI's first-run consent or a "Connect Gmail" button in the dashboard that walks through Google's consent screen and back
-- **Platform-agnostic, keyword-driven search**: application-related emails are found by subject phrase and keyword (`config/sources.yaml`'s `confirmation_keywords`), not a hardcoded sender allowlist, so ATS vendors and direct company emails that were never explicitly added still get picked up
+- **Platform-agnostic, keyword-driven search**: application-related emails are found by subject phrase and keyword (`backend/config/sources.yaml`'s `confirmation_keywords`), not a hardcoded sender allowlist, so ATS vendors and direct company emails that were never explicitly added still get picked up
 - **Concurrent Gmail fetch**: per-message bodies are fetched with a worker thread pool rather than one at a time
 - **A LangGraph extraction pipeline**, one email per graph invocation:
   - `scrutinize_relevance`: a hybrid heuristic + cheap-LLM filter that rejects job-alert digests and recommendation emails before they ever reach the expensive extraction call
@@ -47,7 +47,7 @@ What is actually working today:
 - **Status tracking across the full application lifecycle**: applied, viewed, assessment, interview, rejected, offer, declined (manual-only, for offers you turn down yourself), and other
 - **A React dashboard**: a status-board (Kanban) view with drag-and-drop status correction (keyboard-operable via `@dnd-kit`), inline field editing, a "reprocess from source email" action, per-application timelines with the original source email viewable inline, follow-up reminders, and a per-platform response-rate breakdown - all served by a FastAPI JSON API with a full OpenAPI schema
 - **Manual "Sync Now"** button and a dedicated `/sync` page with a staged progress view (ingestion/scrutiny/extraction/write) and recent-run history, plus the equivalent `applysync sync` CLI command
-- **Best-effort platform attribution** for dashboard labeling (LinkedIn, Indeed, StepStone, SmartRecruiters, Personio, Ashby, and more), configured entirely in `config/sources.yaml`
+- **Best-effort platform attribution** for dashboard labeling (LinkedIn, Indeed, StepStone, SmartRecruiters, Personio, Ashby, and more), configured entirely in `backend/config/sources.yaml`
 - **Playwright end-to-end tests** with an `@axe-core/playwright` accessibility check on every page
 
 Not built yet, see [Roadmap](#roadmap): automatic/scheduled syncing and observability tracing/evals.
@@ -83,7 +83,7 @@ Not built yet, see [Roadmap](#roadmap): automatic/scheduled syncing and observab
 
 Following one email through the system, function by function:
 
-1. `run_sync` (`pipeline/graph.py`) builds a Gmail search query from `config/sources.yaml`'s keywords, bounded by the last successful run's date (with a small lookback buffer), and calls `GmailClient.fetch_messages` (`gmail/client.py`) to pull the raw batch concurrently.
+1. `run_sync` (`pipeline/graph.py`) builds a Gmail search query from `backend/config/sources.yaml`'s keywords, bounded by the last successful run's date (with a small lookback buffer), and calls `GmailClient.fetch_messages` (`gmail/client.py`) to pull the raw batch concurrently.
 2. `process_emails` filters out anything already in the `processed_emails` table (the idempotency guard), then invokes the compiled LangGraph once per remaining email via `compiled.stream(...)`.
 3. `scrutinize_relevance` (`pipeline/nodes.py`) runs a heuristic first (instant reject on known digest markers, instant pass on the original narrow confirmation phrases); only a genuinely ambiguous email triggers one cheap `RelevanceOnlyResult` LLM call. A reject routes straight to `mark_scrutiny_rejected` and the email is marked processed without further work.
 4. `classify_and_extract` sends the email through one structured-output LLM call (`ClassifyAndExtractResult`) that both classifies relevance and extracts `company_name`, `job_title`, `status`, `job_url`, `location`, and `salary_text` in a single round trip.
@@ -171,7 +171,7 @@ Full milestone detail, including the reasoning behind each decision, lives in `C
 
 ## Contributing
 
-This started as a personal tool and learning project, but issues and pull requests are welcome. If you are adding support for a new job platform or ATS vendor, it almost certainly belongs in `config/sources.yaml`, not as new parsing code - that separation is a deliberate design constraint, see `CLAUDE.md` for why.
+This started as a personal tool and learning project, but issues and pull requests are welcome. If you are adding support for a new job platform or ATS vendor, it almost certainly belongs in `backend/config/sources.yaml`, not as new parsing code - that separation is a deliberate design constraint, see `CLAUDE.md` for why.
 
 ## License
 

@@ -55,6 +55,6 @@ def get_settings() -> Settings:
 
 @lru_cache
 def get_sources(path: Path | None = None) -> SourcesConfig:
-    sources_path = path or (PROJECT_ROOT / "config" / "sources.yaml")
+    sources_path = path or (PROJECT_ROOT / "backend" / "config" / "sources.yaml")
     raw = yaml.safe_load(sources_path.read_text())
     return SourcesConfig.model_validate(raw)
