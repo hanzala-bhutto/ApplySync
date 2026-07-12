@@ -640,6 +640,28 @@ subject to the no-backgrounding-dev-servers constraint the way the app's own
         pagination cap bug, the lookback-buffer bug) shows this class of
         bug only ever surfaces against a real inbox, never in unit tests
         alone. Do this before trusting the broadened filter on real data.
+- [x] Web-research foundation: self-hosted SearXNG (see "Web search" section
+      above) + `backend/applysync/search/client.py`. Live-verified against a
+      real query.
+- [x] Company research card (first web-research feature). `POST
+      /api/applications/{id}/research` -> `backend/applysync/research/company.py`
+      searches SearXNG for the company and synthesizes a grounded profile
+      (summary/industry/size/HQ/website/recent_news) plus the source URLs it
+      was grounded in; cached in the new `CompanyProfile` table keyed by
+      company name (shared across applications), `refresh=true` forces a
+      re-fetch. Frontend: a visually-distinct, clearly-web-labeled card on the
+      detail page (`ResearchCard`/`ResearchResult` in `ApplicationDetail.tsx`).
+      **Key finding, verified against the real model, not mocks**: this model
+      (`nemotron-3-nano`) returns an all-empty object from
+      `with_structured_output` (tool-calling) once the schema has any list
+      field, and is unreliable for optional-heavy schemas generally - the same
+      model produces a complete, correct profile via `PydanticOutputParser`
+      over its plain-text output. So `CompanyProfileResult` is flat scalars
+      only (`recent_news` is text, not a list) and research uses the parser,
+      not `with_structured_output`. Do not "simplify" it back to
+      `with_structured_output` without re-checking against the real model.
+      Data-integrity rule enforced: web-sourced profile lives in its own table
+      and its own response model/card, never merged into `Application`.
 - [ ] M4: Scheduler/automation - explicitly NOT the same as the manual
       button above: the user pointed out that an in-process APScheduler tied
       to the FastAPI app (the original plan) only ticks while `applysync
