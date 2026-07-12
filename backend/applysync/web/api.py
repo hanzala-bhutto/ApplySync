@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session
@@ -8,6 +10,8 @@ from applysync.db import repository as repo
 from applysync.db.models import Application, StatusEvent
 from applysync.gmail.client import GmailClient
 from applysync.pipeline.graph import reprocess_application
+from applysync.research import ResearchError, research_company
+from applysync.search import SearxngClient
 
 router = APIRouter(prefix="/api", tags=["applications"])
 
@@ -65,7 +69,40 @@ class ApplicationDetailResponse(BaseModel):
     timeline: list[StatusEvent]
 
 
-def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) -> None:
+class CompanyResearchResponse(BaseModel):
+    """A web-researched company profile. Kept explicitly separate from
+    ApplicationDetailResponse so the frontend never renders these fields as if
+    they were the application's own extracted data: everything here is
+    web-sourced, verifiable via source_urls, and clearly labeled as such."""
+
+    company_name: str
+    summary: str | None
+    industry: str | None
+    company_size: str | None
+    headquarters: str | None
+    website: str | None
+    recent_news: str | None
+    source_urls: list[str]
+    researched_at: str
+
+
+def _profile_to_response(profile) -> dict:
+    return {
+        "company_name": profile.display_name,
+        "summary": profile.summary,
+        "industry": profile.industry,
+        "company_size": profile.company_size,
+        "headquarters": profile.headquarters,
+        "website": profile.website,
+        "recent_news": profile.recent_news,
+        "source_urls": json.loads(profile.source_urls_json) if profile.source_urls_json else [],
+        "researched_at": profile.researched_at.isoformat(),
+    }
+
+
+def register_api_routes(
+    app, *, get_session, get_gmail_client, get_llm_model, get_search_client
+) -> None:
     """Registers the JSON API on `app`. Takes the dependency callables as
     params rather than importing them, so this module doesn't need to import
     back from web.app (which imports this module) and create a cycle.
@@ -190,5 +227,54 @@ def register_api_routes(app, *, get_session, get_gmail_client, get_llm_model) ->
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found")
         return application
+
+    @router.post(
+        "/applications/{application_id}/research",
+        response_model=CompanyResearchResponse,
+        summary="Web-research the application's company (cached; pass refresh=true to re-fetch)",
+        responses={
+            404: {"description": "Application not found"},
+            502: {"description": "Web research failed (search or synthesis error)"},
+        },
+    )
+    def post_research_company(
+        application_id: int,
+        refresh: bool = False,
+        session: Session = Depends(get_session),
+        search_client: SearxngClient = Depends(get_search_client),
+        model=Depends(get_llm_model),
+    ):
+        application = repo.get_application(session, application_id)
+        if application is None:
+            raise HTTPException(status_code=404, detail="Application not found")
+
+        cached = repo.get_company_profile(session, application.company_name)
+        if cached is not None and not refresh:
+            return _profile_to_response(cached)
+
+        try:
+            profile, source_urls = research_company(
+                application.company_name, search_client=search_client, model=model
+            )
+        except ResearchError as exc:
+            # Plain-language message, not the raw exception - matches the
+            # project's mutation-feedback rule. The specifics are logged
+            # server-side by research_company itself.
+            raise HTTPException(
+                status_code=502, detail="Could not research this company right now."
+            ) from exc
+
+        stored = repo.upsert_company_profile(
+            session,
+            display_name=application.company_name,
+            summary=profile.summary,
+            industry=profile.industry,
+            company_size=profile.company_size,
+            headquarters=profile.headquarters,
+            website=profile.website,
+            recent_news=profile.recent_news,
+            source_urls=source_urls,
+        )
+        return _profile_to_response(stored)
 
     app.include_router(router)

@@ -33,6 +33,39 @@ class FakeExtractModel:
         return self
 
 
+class FakeCompletionModel:
+    """Stand-in for a chat model used via plain-text completion + an output
+    parser (model.with_retry(...).invoke(messages).content), as
+    research_company does. `content` should be the raw text the parser will
+    parse (e.g. a JSON string)."""
+
+    def __init__(self, content: str = "", exception=None):
+        self._content = content
+        self._exception = exception
+
+    def with_retry(self, **kwargs):
+        return self
+
+    def invoke(self, messages):
+        if self._exception is not None:
+            raise self._exception
+        return FakeResponse(self._content)
+
+
+class FakeSearchClient:
+    """Stand-in for SearxngClient: returns canned results or raises, never
+    touches a real SearXNG instance."""
+
+    def __init__(self, results=None, exception=None):
+        self._results = results or []
+        self._exception = exception
+
+    def search(self, query, *, max_results=5, **kwargs):
+        if self._exception is not None:
+            raise self._exception
+        return self._results[:max_results]
+
+
 class FakeGmailService:
     def __init__(self, raw_message: dict):
         self._raw_message = raw_message
