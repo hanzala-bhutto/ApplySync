@@ -7,6 +7,7 @@ An email-driven job application tracker that pulls your applications out of your
 - [Motivation](#motivation)
 - [Tech Stack](#tech-stack)
 - [Features](#features)
+- [Screenshots](#screenshots)
 - [Architecture](#architecture)
 - [LangGraph Decision Making](#langgraph-decision-making)
 - [Data Flow](#data-flow)
@@ -53,6 +54,36 @@ What is actually working today:
 - **Playwright end-to-end tests** with an `@axe-core/playwright` accessibility check on every page
 
 Not built yet, see [Roadmap](#roadmap): automatic/scheduled syncing and observability tracing/evals.
+
+## Screenshots
+
+Rendered from the Playwright end-to-end suite's mocked fixtures, so they use
+example data ("Acme Corp", "Globex"), not a real inbox. Regenerate with
+`SCREENSHOTS=1 npx playwright test screenshots.spec.ts` in `frontend/`.
+
+**Application pipeline** - a Kanban board grouped by status, with drag-and-drop status correction and a follow-up reminders preview:
+
+![The ApplySync dashboard: a Kanban pipeline board grouped by application status, with a follow-up reminders section](docs/screenshots/dashboard.png)
+
+**Application detail with company research** - the web-research card is clearly labeled as web-sourced and kept separate from the email-extracted fields above it, with source links for verification:
+
+![An application detail page showing the extracted fields, a status timeline, and a sky-blue company research card labeled 'from the web' with summary, industry, size, headquarters, website, and recent news](docs/screenshots/application-detail.png)
+
+**Sync** - a staged progress view (ingestion, scrutiny, extraction, classification/DB write) with a recent-run history and the Full Scan control:
+
+![The Sync page showing staged progress bars for a finished run and a recent-runs table](docs/screenshots/sync.png)
+
+**Review** - full-scan runs never overwrite data; they queue suggestions here for approval, with a before/after diff for status changes:
+
+![The Review page showing two full-scan suggestions, a new application and an update-existing with an applied-to-rejected status diff, each with Approve and Reject buttons](docs/screenshots/review.png)
+
+**Analytics** - response rate per platform:
+
+![The Analytics page showing per-platform response-rate bars](docs/screenshots/analytics.png)
+
+**Follow-Up** - applications with no update in 14+ days, oldest first:
+
+![The Follow-Up page listing an application needing follow-up in a table](docs/screenshots/reminders.png)
 
 ## Architecture
 
