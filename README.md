@@ -8,6 +8,7 @@ An email-driven job application tracker that pulls your applications out of your
 - [Tech Stack](#tech-stack)
 - [Features](#features)
 - [Architecture](#architecture)
+- [LangGraph Decision Making](#langgraph-decision-making)
 - [Data Flow](#data-flow)
 - [Setup](#setup)
 - [Roadmap](#roadmap)
@@ -78,6 +79,59 @@ Not built yet, see [Roadmap](#roadmap): automatic/scheduled syncing and observab
 ```
 
 `fetch_emails` is a plain batch fetch, not a graph node - the graph operates on one email at a time, driven by a loop in `process_emails`. An email that fails scrutiny, isn't a genuine application confirmation, or can't be confidently extracted is routed to a short-circuit terminal node that marks it processed without creating any application/event rows, so it is recorded once and never retried, while the reason it was skipped is kept.
+
+## LangGraph Decision Making
+
+The Architecture diagram above shows the happy path. This section shows the actual branching logic inside the compiled `StateGraph` (`pipeline/graph.py`) - every conditional edge, the exact field it checks, and where each branch terminates:
+
+```
++------------------------------+
+|     scrutinize_relevance     |   entry point - heuristic string match;
++------------------------------+   LLM call only if ambiguous (fails open to "pass")
+              |
+              |---- scrutiny == "reject" ----> +------------------------+
+              |                                | mark_scrutiny_rejected |  --> END
+              |                                +------------------------+
+              v   scrutiny == "pass"
++------------------------------+
+|     classify_and_extract     |   always 1 LLM call (ClassifyAndExtractResult)
++------------------------------+
+              |
+              |---- extracted is None, classification == "irrelevant" ------> +-----------------+
+              |                                                               | mark_irrelevant |  --> END
+              |                                                               +-----------------+
+              |
+              |---- extracted is None, else (LLM error / missing fields) ---> +------------------------+
+              |                                                               | mark_extraction_failed |  --> END
+              |                                                               +------------------------+
+              v   extracted is not None
++------------------------------+
+|  match_existing_application  |   DB heuristic match (company+title+platform), no LLM
++------------------------------+
+              |
+              v
++------------------------------+
+|          upsert_db           |   deterministic: insert new Application or append StatusEvent
++------------------------------+
+              |
+              v
+             END
+```
+
+What each conditional edge actually checks:
+
+- **`scrutinize_relevance` -> `scrutiny`** (`"pass"` / `"reject"`): a pure heuristic (subject/body string matching against known digest markers and confirmation phrases) resolves most emails with zero LLM calls; only a genuinely ambiguous subject triggers one `RelevanceOnlyResult` LLM call.
+- **`classify_and_extract` -> `_route()`** on `extracted` and `classification`: `extracted is not None` routes to matching; `extracted is None` splits again on whether the model classified the email as `"irrelevant"` versus a genuine failure (LLM error, or missing `company_name`).
+
+All three `mark_*` nodes (`mark_scrutiny_rejected`, `mark_irrelevant`, `mark_extraction_failed`) are the same `make_skip_node` factory, parameterized only by the `classification` string they record - each just calls `repo.mark_processed` and writes no `Application`/`StatusEvent` rows, so a skipped email is recorded once and never retried, while the reason it was skipped is preserved for later inspection.
+
+`match_existing_application`'s `MatchDecision.action` (`new_application` vs. `update_existing`) branches *inside* `upsert_db` rather than as a graph-level conditional edge - deciding whether to insert a new `Application` or append a `StatusEvent` to an existing one, but not changing which node runs next.
+
+`full_scan.py` (used by the dashboard's "Full Scan" review flow) reuses `scrutinize_relevance` and `classify_and_extract` as plain Python functions with its own manual branching to produce `ReviewSuggestion` rows for human approval - it does not build or run a `StateGraph`, so it isn't part of this diagram.
+
+### This is a workflow, not an agent
+
+Every branch above is a plain Python conditional reading a state field (`scrutiny`, or `_route()` on `extracted`/`classification`) - **no LLM decides which node runs next, and there is no tool-calling loop**. The LLM only fills in structured fields; the routing is deterministic code. That is a deliberate fit for this stage of the pipeline, where the set of outcomes is small and known in advance, so a fixed graph is easier to test and reason about than an agent would be. The genuinely *agentic* behavior (an LLM choosing tools in a loop, deciding for itself when it has enough information) is where the web-research features begin - see the company research card, and the further research features on the [Roadmap](#roadmap).
 
 ## Data Flow
 
