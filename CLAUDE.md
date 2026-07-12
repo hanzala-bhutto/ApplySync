@@ -69,13 +69,15 @@ each session.
 ## Architecture
 
 ```
-[Gmail API] --(poll, filtered query)--> gmail/client.py
+[Gmail API] --(poll, keyword-filtered query, concurrent fetch)--> gmail/client.py
                                               |
-                                   raw email batch
+                                   raw email batch (fetched in process_emails,
+                                   filtered by processed_emails idempotency)
                                               v
-                    LangGraph pipeline: pipeline/graph.py
-   fetch_emails -> classify_and_extract -> match_existing_application
-        -> upsert_db
+                    LangGraph pipeline: pipeline/graph.py (one email per invocation)
+   scrutinize_relevance -> classify_and_extract -> match_existing_application -> upsert_db
+     (any of scrutinize/classify/extract can short-circuit to a mark_* skip
+      node -> END; see "LangGraph pipeline nodes" below for the exact routing)
                                               |
                                               v
                           SQLite: db/models.py + repository.py
@@ -86,7 +88,9 @@ each session.
                                               v
                     React frontend (frontend/, separate dev server)
 
-              Scheduler: APScheduler --triggers--> pipeline run every N min
+              Manual trigger: POST /api/sync -> background thread runs the pipeline once
+              [Not built yet] Scheduler: OS-level scheduled task -> `applysync sync` daily
+                              (in-process APScheduler ruled out, see M4)
               [Phase 2] LangSmith / Langfuse tracing wraps the LangGraph run
 ```
 
