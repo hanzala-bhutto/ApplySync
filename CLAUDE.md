@@ -666,6 +666,62 @@ subject to the no-backgrounding-dev-servers constraint the way the app's own
       `with_structured_output` without re-checking against the real model.
       Data-integrity rule enforced: web-sourced profile lives in its own table
       and its own response model/card, never merged into `Application`.
+
+### Remaining web-research features (session handoff plan)
+
+All build on the shipped foundation and reuse its patterns, so a new session
+can pick any of them up cold. **Shared, already in place**: SearXNG
+(`searxng/`, must be running - `docker compose up -d`), the search client
+(`backend/applysync/search/client.py`, `get_search_client` DI), and the
+grounded-synthesis pattern (`backend/applysync/research/company.py`). **Two
+load-bearing constraints that apply to every one of these** (learned the hard
+way, do not relitigate): (1) this model needs `PydanticOutputParser` over
+plain-text output with **flat scalar-only** schemas - `with_structured_output`
+returns empty once a schema has any list field; (2) web-sourced data stays in
+its own table/response model/card, never merged into `Application`. Locked with
+the user, ordered by dependency:
+
+- [ ] **Entity/duplicate resolution (do first - the first genuinely agentic
+      feature).** New conditional branch off `match_existing_application` in
+      `pipeline/graph.py`: when a candidate exists but fields conflict (the
+      documented missing-title vs different-title gap, e.g. the Nagarro/EGYM
+      cases) route to a disambiguation agent instead of the current heuristic
+      guess. Agent = an LLM tool-loop (`create_react_agent` or a hand-rolled
+      loop with a loop-continuation router that checks
+      `state["messages"][-1].tool_calls`) with tools: search the DB for
+      candidates (`repo.find_matching_application` / new query helpers), read an
+      application's status history, fetch+diff the two source emails
+      (`GmailClient.get_message`), and a SearXNG search to confirm real-world
+      entity identity. Returns a structured `MatchDecision`. Keep the
+      `processed_emails` idempotency guard intact; note the non-determinism/cost
+      tradeoff (only invoke the agent for genuinely ambiguous cases, never the
+      clear ones). This is the "workflow -> agent" step the README's LangGraph
+      section points at.
+- [ ] **Company-alias canonicalization.** Resolve a company's official name +
+      known aliases via search, store a mapping (new `canonical_name`/alias
+      table + `repo` apply helpers). Apply at match time and as a one-off batch
+      cleanup over existing rows. Feeds entity-resolution above and the
+      research-card cache key (dedupes "Meta"/"Facebook"/"Meta Platforms").
+- [ ] **Follow-up "should I chase + warm draft".** On-demand button on the
+      detail / `/reminders` pages. Small agent: search the company's recent news
+      -> classify health (active / frozen / dead) -> if active, draft a warm
+      follow-up email that references something current; if frozen/dead, return
+      an advisory instead of a draft. New `POST
+      /api/applications/{id}/follow-up-draft`. **Gmail stays readonly** - the
+      draft is shown for the user to copy, never sent. Reuse `research/` +
+      the grounded-parser pattern.
+- [ ] **Interview-prep dossier.** On status -> `interview` (or on-demand),
+      run several searches and synthesize a structured dossier (recent company
+      news, interview format for the role, common questions), cached in a new
+      `InterviewDossier` table + endpoint + a detail-page card. Same
+      grounded-parser pattern.
+- [ ] **Review-suggestion triage (full-scan).** Add a confidence step to
+      `pipeline/full_scan.py` that can search to verify a suggestion's
+      company/domain, auto-accept high-confidence ones, and surface only the
+      genuinely ambiguous. New `confidence` field on `ReviewSuggestion`.
+      Directly targets the false-positive-flood pain (the "528 suggestions"
+      commit).
+
 - [ ] M4: Scheduler/automation - explicitly NOT the same as the manual
       button above: the user pointed out that an in-process APScheduler tied
       to the FastAPI app (the original plan) only ticks while `applysync
