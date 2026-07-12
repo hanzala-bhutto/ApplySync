@@ -31,6 +31,31 @@ def sync() -> None:
 
 
 @app.command()
+def search(query: str, max_results: int = 5) -> None:
+    """Query the self-hosted SearXNG instance directly. A smoke test that the
+    web-research layer is up before wiring it into the research features."""
+    from applysync.config import get_settings
+    from applysync.search import SearxngError, get_search_client
+
+    client = get_search_client(get_settings())
+    try:
+        results = client.search(query, max_results=max_results)
+    except SearxngError as exc:
+        typer.echo(f"search failed: {exc}", err=True)
+        typer.echo("is SearXNG running? (docker compose up -d in searxng/)", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if not results:
+        typer.echo("no results")
+        return
+    for i, result in enumerate(results, start=1):
+        typer.echo(f"{i}. {result.title}")
+        typer.echo(f"   {result.url}")
+        if result.content:
+            typer.echo(f"   {result.content}")
+
+
+@app.command()
 def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> None:
     """Run the web dashboard. Pass --reload during development to auto-
     restart on code changes (off by default, matches normal use)."""

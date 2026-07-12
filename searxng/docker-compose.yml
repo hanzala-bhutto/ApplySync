@@ -1,0 +1,22 @@
+# Self-hosted SearXNG for ApplySync's web-research features.
+#
+# Start it (from this directory, in your own terminal):
+#   docker compose up -d
+# Stop it:
+#   docker compose down
+#
+# Single service, no Redis: the rate limiter is disabled in settings.yml, which
+# is what would otherwise require Redis. Fine for a single-user local tool.
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: applysync-searxng
+    # Host 8888 avoids clashing with the app's backend (8000) and Vite (5173).
+    # The app reads this via SEARXNG_URL (see .env.example); keep them in sync.
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    restart: unless-stopped

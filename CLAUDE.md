@@ -7,14 +7,17 @@ job-application data (company, title, platform, status) from application
 confirmation emails, and persists it to a local SQLite database viewable in a
 small web dashboard.
 
-Two purposes, both load-bearing, don't optimize away either one:
-1. **Real utility**: one place to see every application and its status, instead
-   of scattered platform inboxes.
-2. **Learning vehicle**: the user is learning LangChain, LangChain Community,
-   LangGraph, LangSmith, Langfuse, and agentic/multi-agent orchestration by
-   building this. Prefer designs that make concepts legible (distinct
-   nodes/agents with clear responsibilities) over the shortest path to working
-   code.
+The goal is one place to see every application and its status, instead of
+scattered platform inboxes, plus the web-research capabilities layered on top
+(company research, follow-up drafting, entity resolution) that make it more than
+a passive inbox reader.
+
+**Design principle**: prefer distinct nodes/agents with clear, single
+responsibilities over the shortest path to working code. This is not gold-
+plating - the codebase's own history (per-node bugs like the EGYM dedupe, the
+job-title placeholder hallucination, the lookback-buffer edge case) shows a
+pipeline built from small, legible, independently-testable stages is far easier
+to debug and extend than one monolithic call. Keep it that way.
 
 Full design rationale lives in the plan this was built from:
 `C:\Users\Hp\.claude\plans\i-want-to-learn-floating-mitten.md` (not part of
@@ -233,15 +236,41 @@ backend/
     gmail/client.py, gmail/query_builder.py
     pipeline/state.py, pipeline/nodes.py, pipeline/graph.py
     db/models.py, db/repository.py, db/init_db.py
+    search/client.py          # SearXNG web-search client (foundation for research features)
     web/app.py, web/api.py
     scheduler/run_scheduler.py
-    cli.py                    # `applysync sync`, `applysync serve`
+    cli.py                    # `applysync sync`, `applysync serve`, `applysync search`
   config/sources.yaml
   scripts/gmail_probe.py
 frontend/                     # React (Vite + TypeScript) dashboard, separate dev server
+searxng/                      # self-hosted SearXNG (docker-compose.yml + settings.yml)
 eval/samples/, eval/run_eval.py   # phase 2
 tests/
 ```
+
+## Web search (self-hosted, keyless)
+
+Web-research features (planned: company-research card, follow-up "should I chase
+this + warm draft", duplicate/entity resolution, company-alias canonicalization,
+interview-prep dossier) get live results from a **self-hosted SearXNG** instance,
+never a paid API or external account - a deliberate choice to keep the tool
+local-first and keyless, matching the rest of the design. `searxng/` holds a
+single-service `docker-compose.yml` (no Redis: the bot-detection limiter is
+disabled in `settings.yml`, which is what would otherwise require it) exposing
+SearXNG's JSON API on `http://localhost:8888`. `backend/applysync/search/client.py`
+is a thin httpx client (`SearxngClient.search()` returns parsed `SearchResult`s,
+raises `SearxngError` on failure so a real outage is never silently confused with
+"no results"); `get_search_client(settings)` follows the same DI pattern as
+`get_gmail_client`/`get_llm_model` so tests inject a fake. `applysync search
+"<query>"` is a CLI smoke test. **Hard rule for the features built on top of
+this**: web-sourced data must stay visually and schema-separated from
+email-extracted facts - never let "the internet suggested this" get mistaken for
+"the company told me this" (this project's oldest data-integrity sensitivity).
+The service itself is a required-running dependency for those features (like the
+dev servers, the user starts it in their own terminal: `docker compose up -d` in
+`searxng/`); the SearXNG container is detached/Docker-managed, so it is not
+subject to the no-backgrounding-dev-servers constraint the way the app's own
+`serve`/`npm run dev` are.
 
 ## Milestones (update status here as they land)
 
