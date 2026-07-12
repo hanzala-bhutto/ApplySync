@@ -6,7 +6,14 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlmodel import Session, func, select
 
-from applysync.db.models import Application, PipelineRun, ProcessedEmail, ReviewSuggestion, StatusEvent
+from applysync.db.models import (
+    Application,
+    CompanyProfile,
+    PipelineRun,
+    ProcessedEmail,
+    ReviewSuggestion,
+    StatusEvent,
+)
 
 # Common legal-entity suffixes that show up inconsistently across emails for
 # the same real company (e.g. "EGYM" vs "EGYM SE" - two confirmation emails
@@ -134,6 +141,55 @@ def add_status_event(
 
 def get_application(session: Session, application_id: int) -> Application | None:
     return session.get(Application, application_id)
+
+
+def company_key(display_name: str) -> str:
+    """Cache key for a company profile: lowercased + whitespace-collapsed so
+    "EGYM" and "egym " resolve to one cached profile. Kept simpler than the
+    match-normalization above (no legal-suffix stripping) on purpose - a
+    profile for "EGYM SE" and one for "EGYM" are close enough to share, but we
+    don't want to over-merge distinct companies for a research lookup."""
+    return " ".join(display_name.lower().split())
+
+
+def get_company_profile(session: Session, display_name: str) -> CompanyProfile | None:
+    return session.get(CompanyProfile, company_key(display_name))
+
+
+def upsert_company_profile(
+    session: Session,
+    *,
+    display_name: str,
+    summary: str | None,
+    industry: str | None,
+    company_size: str | None,
+    headquarters: str | None,
+    website: str | None,
+    recent_news: str | None,
+    source_urls: list[str] | None,
+) -> CompanyProfile:
+    """Insert or replace the cached web-research profile for a company. Replace
+    (not append) because a refresh should reflect the latest web state, not
+    accumulate stale rows."""
+    key = company_key(display_name)
+    profile = session.get(CompanyProfile, key)
+    if profile is None:
+        profile = CompanyProfile(company_key=key, display_name=display_name)
+
+    profile.display_name = display_name
+    profile.summary = summary
+    profile.industry = industry
+    profile.company_size = company_size
+    profile.headquarters = headquarters
+    profile.website = website
+    profile.recent_news = recent_news
+    profile.source_urls_json = json.dumps(source_urls) if source_urls else None
+    profile.researched_at = _utcnow()
+
+    session.add(profile)
+    session.commit()
+    session.refresh(profile)
+    return profile
 
 
 def set_manual_status(session: Session, application_id: int, status: str) -> Application | None:

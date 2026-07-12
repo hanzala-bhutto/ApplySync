@@ -10,6 +10,7 @@ from applysync.config import get_settings
 from applysync.db.init_db import get_engine, init_db
 from applysync.gmail.client import GmailClient
 from applysync.llm import get_chat_model
+from applysync.search import SearxngClient, get_search_client as _build_search_client
 from applysync.web.api import register_api_routes
 from applysync.web.gmail_oauth import register_gmail_oauth_routes
 from applysync.web.review import register_review_routes
@@ -47,6 +48,10 @@ def get_llm_model():
     return get_chat_model(get_settings())
 
 
+def get_search_client() -> SearxngClient:
+    return _build_search_client(get_settings())
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="ApplySync API",
@@ -62,7 +67,13 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    register_api_routes(app, get_session=get_session, get_gmail_client=get_gmail_client, get_llm_model=get_llm_model)
+    register_api_routes(
+        app,
+        get_session=get_session,
+        get_gmail_client=get_gmail_client,
+        get_llm_model=get_llm_model,
+        get_search_client=get_search_client,
+    )
     register_gmail_oauth_routes(app, get_settings=get_settings)
     register_sync_routes(app, get_session=get_session, get_settings=get_settings)
     register_review_routes(app, get_session=get_session)

@@ -107,6 +107,26 @@ export function postReprocess(id: number): Promise<Application> {
   return request(`/api/applications/${id}/reprocess`, { method: 'POST' })
 }
 
+/** A web-researched company profile. Everything here is web-sourced (verifiable
+ * via source_urls), never the application's own email-extracted data - the UI
+ * labels it as such and keeps it visually separate. */
+export interface CompanyResearch {
+  company_name: string
+  summary: string | null
+  industry: string | null
+  company_size: string | null
+  headquarters: string | null
+  website: string | null
+  recent_news: string | null
+  source_urls: string[]
+  researched_at: string
+}
+
+export function postResearchCompany(id: number, refresh = false): Promise<CompanyResearch> {
+  const query = refresh ? '?refresh=true' : ''
+  return request(`/api/applications/${id}/research${query}`, { method: 'POST' })
+}
+
 export interface SourceEmail {
   subject: string
   sender: string

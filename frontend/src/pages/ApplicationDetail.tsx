@@ -7,7 +7,9 @@ import {
   patchFields,
   patchStatus,
   postReprocess,
+  postResearchCompany,
   type Application,
+  type CompanyResearch,
   type StatusEvent,
 } from '../lib/api'
 import { avatarFor } from '../lib/avatar'
@@ -172,6 +174,8 @@ export function ApplicationDetail() {
         {editing && <EditForm application={application} onSave={(fields) => fieldsMutation.mutate(fields)} saving={fieldsMutation.isPending} />}
       </section>
 
+      <ResearchCard applicationId={applicationId} companyName={application.company_name} />
+
       <section>
         <h2 className="mb-3 text-sm font-semibold text-slate-500 dark:text-slate-400">Timeline</h2>
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -204,6 +208,128 @@ export function ApplicationDetail() {
           reprocessMutation.mutate()
         }}
       />
+    </div>
+  )
+}
+
+function ResearchCard({ applicationId, companyName }: { applicationId: number; companyName: string }) {
+  const { showToast } = useToast()
+  const mutation = useMutation({
+    mutationFn: (refresh: boolean) => postResearchCompany(applicationId, refresh),
+    onError: () => showToast({ message: 'Could not research this company right now.', variant: 'error' }),
+  })
+  const profile = mutation.data
+
+  return (
+    <section className="mb-8 rounded-xl border border-sky-200 bg-sky-50/50 p-5 shadow-sm dark:border-sky-900 dark:bg-sky-950/30">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            Company research
+            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-700 dark:bg-sky-900 dark:text-sky-300">
+              from the web
+            </span>
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Pulled from public web results, not your emails. Verify against the sources before relying on it.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => mutation.mutate(profile != null)}
+          disabled={mutation.isPending}
+          className="shrink-0 cursor-pointer rounded-lg border border-sky-300 bg-white px-3 py-1.5 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-sky-800 dark:bg-slate-800 dark:text-sky-300 dark:hover:bg-slate-700"
+        >
+          {mutation.isPending
+            ? 'Researching...'
+            : profile != null
+              ? 'Refresh'
+              : `Research ${companyName}`}
+        </button>
+      </div>
+
+      {mutation.isPending && (
+        <p className="text-sm text-slate-500 dark:text-slate-400" role="status">
+          Searching the web and summarizing...
+        </p>
+      )}
+
+      {profile != null && !mutation.isPending && <ResearchResult profile={profile} />}
+    </section>
+  )
+}
+
+function ResearchResult({ profile }: { profile: CompanyResearch }) {
+  const rows: [string, string | null][] = [
+    ['Industry', profile.industry],
+    ['Size', profile.company_size],
+    ['Headquarters', profile.headquarters],
+  ]
+  const hasAnything =
+    profile.summary || profile.industry || profile.company_size || profile.headquarters ||
+    profile.website || profile.recent_news
+
+  if (!hasAnything) {
+    return (
+      <p className="text-sm text-slate-500 dark:text-slate-400">
+        Nothing clear enough to report from the web results. Check the sources below.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-3 text-sm">
+      {profile.summary && <p>{profile.summary}</p>}
+
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {rows
+          .filter(([, value]) => value)
+          .map(([label, value]) => (
+            <div key={label}>
+              <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        {profile.website && (
+          <div>
+            <dt className="text-xs text-slate-500 dark:text-slate-400">Website</dt>
+            <dd className="truncate">
+              <a
+                href={profile.website}
+                target="_blank"
+                rel="noreferrer"
+                className="text-brand-600 hover:underline dark:text-brand-400"
+              >
+                {profile.website.replace(/^https?:\/\//, '')}
+              </a>
+            </dd>
+          </div>
+        )}
+      </dl>
+
+      {profile.recent_news && (
+        <div>
+          <dt className="text-xs text-slate-500 dark:text-slate-400">Recent news</dt>
+          <dd className="mt-0.5">{profile.recent_news}</dd>
+        </div>
+      )}
+
+      {profile.source_urls.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+            Sources ({profile.source_urls.length})
+          </summary>
+          <ul className="mt-1.5 space-y-1">
+            {profile.source_urls.map((url) => (
+              <li key={url} className="truncate">
+                <a href={url} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline dark:text-brand-400">
+                  {url.replace(/^https?:\/\//, '')}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   )
 }

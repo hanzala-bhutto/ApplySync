@@ -48,6 +48,7 @@ What is actually working today:
 - **A React dashboard**: a status-board (Kanban) view with drag-and-drop status correction (keyboard-operable via `@dnd-kit`), inline field editing, a "reprocess from source email" action, per-application timelines with the original source email viewable inline, follow-up reminders, and a per-platform response-rate breakdown - all served by a FastAPI JSON API with a full OpenAPI schema
 - **Manual "Sync Now"** button and a dedicated `/sync` page with a staged progress view (ingestion/scrutiny/extraction/write) and recent-run history, plus the equivalent `applysync sync` CLI command
 - **Best-effort platform attribution** for dashboard labeling (LinkedIn, Indeed, StepStone, SmartRecruiters, Personio, Ashby, and more), configured entirely in `backend/config/sources.yaml`
+- **Company research card**: an on-demand "research this company" action on the detail page that pulls a grounded profile (summary, industry, size, HQ, website, recent news) from live web results via the self-hosted SearXNG layer. Web-sourced and clearly labeled as such, kept strictly separate from email-extracted data, with source links for verification and a cached-and-shared profile per company
 - **Playwright end-to-end tests** with an `@axe-core/playwright` accessibility check on every page
 
 Not built yet, see [Roadmap](#roadmap): automatic/scheduled syncing and observability tracing/evals.
@@ -186,7 +187,8 @@ Both `applysync sync` and a dashboard-triggered sync fetch new application-relat
 - [x] Pipeline redesign (broadened keyword coverage, a scrutiny node ahead of extraction, and staged sync progress) - real-inbox verification of the broadened filter is still outstanding
 - [ ] Scheduler: automatic periodic syncing independent of whether the dashboard/server is running (planned as an OS-level scheduled task, not an in-process one)
 - [x] Self-hosted, keyless web-search layer (SearXNG) as the foundation for the research features below
-- [ ] Web-research features on top of it: company-research card, follow-up "should I chase this + warm draft", duplicate/entity resolution, company-alias canonicalization, and an interview-prep dossier
+- [x] Company research card (first web-research feature): grounded, cached, source-linked company profiles on the detail page
+- [ ] More web-research features on top of the same layer: follow-up "should I chase this + warm draft", duplicate/entity resolution, company-alias canonicalization, and an interview-prep dossier
 - [ ] Observability: LangSmith and Langfuse tracing, plus a hand-labeled evaluation set for extraction accuracy
 
 Full milestone detail, including the reasoning behind each decision, lives in `CLAUDE.md`.
