@@ -32,7 +32,7 @@ each session.
 - **LLM-based extraction, not per-platform parsers.** Don't write regex/HTML
   scrapers keyed to a specific platform's email template, that's the exact
   brittleness this project avoids. New attribution vendors get added via
-  `config/sources.yaml`, not new parsing code.
+  `backend/config/sources.yaml`, not new parsing code.
 - **Gmail query is keyword-only, not sender-domain-restricted.** Confirmed
   against a real inbox: application confirmations come from an unenumerable
   set of senders (every ATS vendor, every company's own domain), so a domain
@@ -227,24 +227,26 @@ chased further without more concrete real examples.
 ## Repo layout
 
 ```
-src/applysync/
-  config.py
-  gmail/client.py, gmail/query_builder.py
-  pipeline/state.py, pipeline/nodes.py, pipeline/graph.py
-  db/models.py, db/repository.py, db/init_db.py
-  web/app.py, web/templates/, web/static/
-  scheduler/run_scheduler.py
-  cli.py                    # `applysync sync`, `applysync serve`
-config/sources.yaml
+backend/
+  applysync/
+    config.py
+    gmail/client.py, gmail/query_builder.py
+    pipeline/state.py, pipeline/nodes.py, pipeline/graph.py
+    db/models.py, db/repository.py, db/init_db.py
+    web/app.py, web/api.py
+    scheduler/run_scheduler.py
+    cli.py                    # `applysync sync`, `applysync serve`
+  config/sources.yaml
+  scripts/gmail_probe.py
+frontend/                     # React (Vite + TypeScript) dashboard, separate dev server
 eval/samples/, eval/run_eval.py   # phase 2
 tests/
-scripts/gmail_probe.py
 ```
 
 ## Milestones (update status here as they land)
 
 - [x] M1a: Gmail OAuth client, query builder, message parsing (code done, tested)
-- [x] M1b: Manual extraction spike, ran `scripts/gmail_probe.py` against the
+- [x] M1b: Manual extraction spike, ran `backend/scripts/gmail_probe.py` against the
       real inbox. Initial design (sender-domain allowlist: LinkedIn, Indeed,
       StepStone, jackandjill.ai) turned out to be the wrong approach:
       LinkedIn Easy Apply and jackandjill.ai send no confirmation emails at
@@ -306,7 +308,7 @@ scripts/gmail_probe.py
       Google's own pages) whenever disconnected, and handles the
       `?gmail=connected`/`?gmail=error` redirect back with a toast + URL
       cleanup. `/gmail-setup` skill updated to document both paths (CLI
-      first-run still works for `scripts/gmail_probe.py`).
+      first-run still works for `backend/scripts/gmail_probe.py`).
 
       Three real bugs found testing the actual flow (not caught by the
       mocked backend tests, since those never exercise a real token
@@ -549,7 +551,7 @@ scripts/gmail_probe.py
       Gmail search is subject-only, and its subject didn't match any
       `confirmation_keywords` phrase (closest was `"your application for"`,
       but this one said "at"). Added `"your application at"` to
-      `config/sources.yaml`. (2) Fixing (1) alone wasn't enough: the two
+      `backend/config/sources.yaml`. (2) Fixing (1) alone wasn't enough: the two
       zero-result manual syncs run while testing this feature still
       completed "successfully" (0 emails found, but `finished_at` got set),
       which advanced `last_successful_run_started_at` to that day. Since
@@ -569,7 +571,7 @@ scripts/gmail_probe.py
       concurrent Gmail fetch, a new `scrutinize_relevance` LangGraph node,
       `PipelineRun` incremental progress fields, and a dedicated `/sync`
       staged-progress page.
-      - **#17**: `config/sources.yaml`'s `confirmation_keywords` gained
+      - **#17**: `backend/config/sources.yaml`'s `confirmation_keywords` gained
         single-word matches (`applied`, `interview`, `rejected`, `offer`,
         etc.) alongside the existing exact phrases, so emails whose subject
         doesn't match a known phrase (a real rejection email from "dexter

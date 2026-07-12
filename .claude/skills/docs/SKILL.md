@@ -20,7 +20,7 @@ that structure instead, check before assuming a single README.
    multi-platform fragmentation, why email-driven LLM extraction instead of
    scraping/manual entry. Pull this from `CLAUDE.md`, don't reinvent it.
 2. **Features**: bullet list generated from what's *actually implemented*.
-   Check `src/applysync/` for which pieces exist: Gmail ingestion? pipeline
+   Check `backend/applysync/` for which pieces exist: Gmail ingestion? pipeline
    nodes? dashboard views? scheduler? Only list what runs today.
 3. **Architecture**: the pipeline diagram (Gmail to LangGraph nodes to SQLite
    to dashboard). Copy/adapt the ASCII diagram in `CLAUDE.md` if it still matches
@@ -38,7 +38,7 @@ that structure instead, check before assuming a single README.
 ## Process
 
 1. Read `CLAUDE.md` for the durable architecture/constraints summary.
-2. Read the actual source tree (`src/applysync/**`) to confirm what exists
+2. Read the actual source tree (`backend/applysync/**`) to confirm what exists
    vs. what's still planned.
 3. Read the existing `README.md` if present. Preserve any user-written
    sections that aren't part of the fixed structure above (e.g. a personal
