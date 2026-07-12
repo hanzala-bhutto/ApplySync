@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from applysync.db import repository as repo
 from applysync.db.models import ReviewSuggestion
 
 router = APIRouter(prefix="/api/review-suggestions", tags=["review"])
+
+
+class RejectAllResponse(BaseModel):
+    rejected_count: int
 
 
 def register_review_routes(app, *, get_session) -> None:
@@ -17,6 +22,14 @@ def register_review_routes(app, *, get_session) -> None:
     )
     def list_review_suggestions(session: Session = Depends(get_session)):
         return repo.list_pending_review_suggestions(session)
+
+    @router.post(
+        "/reject-all",
+        response_model=RejectAllResponse,
+        summary="Dismiss every pending review suggestion, without changing any data",
+    )
+    def reject_all(session: Session = Depends(get_session)):
+        return {"rejected_count": repo.reject_all_pending_suggestions(session)}
 
     @router.post(
         "/{suggestion_id}/approve",

@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from applysync.config import Settings, SourcesConfig, get_settings, get_sources
 from applysync.db import repository as repo
 from applysync.db.init_db import get_engine, init_db
-from applysync.db.models import ProcessedEmail
+from applysync.db.models import Application, ProcessedEmail
 from applysync.gmail.client import GmailClient
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import guess_platform
@@ -17,11 +17,19 @@ from applysync.pipeline.nodes import make_classify_and_extract_node, make_scruti
 from applysync.pipeline.state import JobApplicationEvent
 
 
-def _application_differs(application, extracted: JobApplicationEvent) -> bool:
+def _application_differs(application, event, extracted: JobApplicationEvent) -> bool:
+    """Compares against the specific status event THIS email originally
+    created (event.status), not application.current_status. current_status
+    reflects the most recent event across the application's whole history -
+    for an application with more than one transition (e.g. applied ->
+    interview -> rejected), comparing against it would make re-scanning the
+    original "applied" email always look like a disagreement, even though
+    nothing is actually wrong with either the old or new extraction.
+    """
     return (
         application.company_name != extracted.company_name
         or application.job_title != extracted.job_title
-        or application.current_status != extracted.status
+        or event.status != extracted.status
     )
 
 
@@ -30,6 +38,26 @@ def _extract_payload(extracted: JobApplicationEvent, platform_hint: str | None) 
     separately from the sender), so it's merged into the stored JSON here
     rather than added to the schema just for this snapshot."""
     return json.dumps({**extracted.model_dump(), "platform": platform_hint or "other"})
+
+
+def _previous_payload(application, event) -> str:
+    """Snapshot of what this specific email originally recorded, for diff
+    display only - deliberately NOT built via JobApplicationEvent, since
+    that schema's status Literal excludes "declined" (manual-only, the LLM
+    should never produce it - see CLAUDE.md), but a real application can
+    legitimately hold that status. Validating an arbitrary stored value
+    against an LLM-output schema is the wrong tool here. Status comes from
+    the event (this email's own original record), not application.current_status
+    - see _application_differs for why that distinction matters.
+    """
+    return json.dumps(
+        {
+            "company_name": application.company_name,
+            "job_title": application.job_title,
+            "status": event.status,
+            "platform": application.platform,
+        }
+    )
 
 
 def process_full_scan(
@@ -53,12 +81,14 @@ def process_full_scan(
 
     emails_scrutinized = 0
     emails_extracted = 0
+    emails_relevant = 0
     emails_written = 0
     suggestions_created = 0
 
     for email in emails:
         processed = session.get(ProcessedEmail, email.message_id)
-        old_application = repo.find_application_by_source_email(session, email.message_id)
+        old_event = repo.find_status_event_by_source_email(session, email.message_id)
+        old_application = session.get(Application, old_event.application_id) if old_event is not None else None
 
         scrutiny_result = scrutinize({"email": email})
         emails_scrutinized += 1
@@ -70,10 +100,19 @@ def process_full_scan(
             emails_extracted += 1
             new_extracted = extract_result.get("extracted")
             platform_hint = extract_result.get("platform_hint")
+            if new_extracted is not None:
+                emails_relevant += 1
         else:
             platform_hint = guess_platform(email.sender, sources)
 
-        if old_application is not None:
+        # A pending suggestion for this email already exists - from an
+        # earlier full-scan run, or a crashed run that got this far before
+        # failing (suggestions are committed per-email, not all-or-nothing).
+        # Skip creating a duplicate rather than re-flagging the same thing
+        # every time a scan runs.
+        already_pending = repo.has_pending_suggestion_for_message(session, email.message_id)
+
+        if not already_pending and old_application is not None:
             if new_extracted is None:
                 repo.create_review_suggestion(
                     session,
@@ -85,7 +124,7 @@ def process_full_scan(
                     pipeline_run_id=run_id,
                 )
                 suggestions_created += 1
-            elif _application_differs(old_application, new_extracted):
+            elif _application_differs(old_application, old_event, new_extracted):
                 repo.create_review_suggestion(
                     session,
                     message_id=email.message_id,
@@ -93,19 +132,12 @@ def process_full_scan(
                     action="update_existing",
                     previous_classification=processed.classification,
                     suggested_classification="relevant",
-                    previous_extract_json=_extract_payload(
-                        JobApplicationEvent(
-                            company_name=old_application.company_name,
-                            job_title=old_application.job_title,
-                            status=old_application.current_status,
-                        ),
-                        old_application.platform,
-                    ),
+                    previous_extract_json=_previous_payload(old_application, old_event),
                     suggested_extract_json=_extract_payload(new_extracted, platform_hint),
                     pipeline_run_id=run_id,
                 )
                 suggestions_created += 1
-        elif new_extracted is not None:
+        elif not already_pending and new_extracted is not None:
             match = repo.find_matching_application(
                 session, new_extracted.company_name, new_extracted.job_title, platform_hint or "other"
             )
@@ -132,7 +164,7 @@ def process_full_scan(
 
     return {
         "emails_fetched": len(emails),
-        "emails_relevant": emails_extracted,
+        "emails_relevant": emails_relevant,
         "applications_created": 0,
         "events_created": 0,
         "suggestions_created": suggestions_created,
@@ -168,5 +200,6 @@ def full_scan(settings: Settings | None = None) -> dict:
             emails_relevant=stats["emails_relevant"],
             applications_created=stats["applications_created"],
             events_created=stats["events_created"],
+            suggestions_created=stats["suggestions_created"],
         )
         return {"run_id": run_id, **stats}

@@ -107,7 +107,7 @@ test('rejecting a suggestion removes it from the list and shows a toast', async 
   })
 
   await page.goto('/review')
-  await page.getByRole('button', { name: 'Reject' }).click()
+  await page.getByRole('button', { name: 'Reject', exact: true }).click()
 
   await expect(page.getByText('Suggestion dismissed.')).toBeVisible()
   await expect(page.getByText('Nothing to review right now.')).toBeVisible()
@@ -126,4 +126,34 @@ test('review page has no detectable accessibility violations', async ({ page }) 
   await expect(page.getByRole('heading', { name: 'Review' })).toBeVisible()
   const results = await new AxeBuilder({ page }).analyze()
   expect(results.violations).toEqual([])
+})
+
+test('reject all is gated behind a confirm dialog and dismisses every suggestion', async ({ page }) => {
+  let rejectedAll = false
+  await page.route('**/api/review-suggestions', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: rejectedAll ? [] : [suggestion(), suggestion({ id: 2 })] })
+      return
+    }
+    await route.continue()
+  })
+  await page.route('**/api/review-suggestions/reject-all', async (route) => {
+    rejectedAll = true
+    await route.fulfill({ json: { rejected_count: 2 } })
+  })
+
+  await page.goto('/review')
+  await expect(page.getByText('2 suggestions')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Reject All' }).click()
+  await expect(page.getByRole('heading', { name: 'Reject all suggestions?' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await expect(page.getByRole('heading', { name: 'Reject all suggestions?' })).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'Reject All' }).click()
+  await page.getByRole('button', { name: 'Reject All' }).last().click()
+
+  await expect(page.getByText('Dismissed 2 suggestions.')).toBeVisible()
+  await expect(page.getByText('Nothing to review right now.')).toBeVisible()
 })

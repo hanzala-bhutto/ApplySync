@@ -149,6 +149,7 @@ export interface PipelineRun {
   emails_written: number
   updated_at: string
   run_type: 'incremental' | 'full_scan'
+  suggestions_created: number
 }
 
 export interface SyncStatus {
@@ -196,4 +197,8 @@ export function postApproveSuggestion(id: number): Promise<ReviewSuggestion> {
 
 export function postRejectSuggestion(id: number): Promise<ReviewSuggestion> {
   return request(`/api/review-suggestions/${id}/reject`, { method: 'POST' })
+}
+
+export function postRejectAllSuggestions(): Promise<{ rejected_count: number }> {
+  return request('/api/review-suggestions/reject-all', { method: 'POST' })
 }

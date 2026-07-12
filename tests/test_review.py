@@ -95,3 +95,22 @@ def test_approve_unknown_suggestion_returns_404(client):
 def test_reject_unknown_suggestion_returns_404(client):
     response = client.post("/api/review-suggestions/999/reject")
     assert response.status_code == 404
+
+
+def test_reject_all_dismisses_every_pending_suggestion(client):
+    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_scan")
+    for message_id in ("msg-1", "msg-2"):
+        repo.create_review_suggestion(
+            client.db_session,
+            message_id=message_id,
+            action="new_application",
+            previous_classification="irrelevant",
+            suggested_classification="relevant",
+            pipeline_run_id="run-1",
+        )
+
+    response = client.post("/api/review-suggestions/reject-all")
+
+    assert response.status_code == 200
+    assert response.json() == {"rejected_count": 2}
+    assert client.get("/api/review-suggestions").json() == []

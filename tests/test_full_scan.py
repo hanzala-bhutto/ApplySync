@@ -42,6 +42,7 @@ def test_full_scan_suggests_new_application_when_previously_irrelevant_now_relev
     stats = process_full_scan([_email()], model=model, session=session, sources=get_sources(), run_id=run_id)
 
     assert stats["suggestions_created"] == 1
+    assert stats["emails_relevant"] == 1
     suggestion = session.exec(select(ReviewSuggestion)).one()
     assert suggestion.action == "new_application"
     assert suggestion.application_id is None
@@ -98,6 +99,44 @@ def test_full_scan_suggests_update_when_re_extraction_disagrees_with_existing_ap
     assert suggestion.previous_extract_json is not None
     assert '"status": "applied"' in suggestion.previous_extract_json
     assert '"status": "rejected"' in suggestion.suggested_extract_json
+
+
+def test_full_scan_handles_manually_declined_application_without_crashing(session):
+    """Regression test for a real full-scan crash: "declined" is a
+    manual-only status (set via the dashboard, never producible by the
+    LLM - see CLAUDE.md), so it's deliberately excluded from
+    JobApplicationEvent's status Literal. full_scan used to build the
+    "previous" snapshot by constructing a JobApplicationEvent from the
+    application's stored fields, which raised a pydantic ValidationError
+    the moment it hit a real declined application and crashed the whole
+    scan partway through.
+    """
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="declined",
+    )
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="declined",
+        event_date=datetime(2026, 1, 1),
+        source_email_id="msg-1",
+    )
+    repo.mark_processed(session, "msg-1", classification="relevant", pipeline_run_id="old-run")
+    run_id = _run(session)
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="offer")
+
+    stats = process_full_scan([_email()], model=model, session=session, sources=get_sources(), run_id=run_id)
+
+    assert stats["suggestions_created"] == 1
+    suggestion = session.exec(select(ReviewSuggestion)).one()
+    assert suggestion.action == "update_existing"
+    assert '"status": "declined"' in suggestion.previous_extract_json
+    assert '"status": "offer"' in suggestion.suggested_extract_json
 
 
 def test_full_scan_suggests_reclassify_irrelevant_when_no_longer_relevant(session):
@@ -164,6 +203,113 @@ def test_full_scan_creates_no_suggestion_when_still_not_relevant(session):
 
     assert stats["suggestions_created"] == 0
     assert session.exec(select(ReviewSuggestion)).all() == []
+
+
+def test_full_scan_does_not_false_flag_an_older_email_after_a_later_status_change(session):
+    """Regression test for a real bug: re-scanning an application's ORIGINAL
+    "applied" confirmation email used to be compared against
+    application.current_status (the application's latest/current status,
+    e.g. "rejected" after later emails moved it along), not against what
+    that specific email actually recorded at the time. That made every
+    multi-event application false-flag on every one of its older emails,
+    which is what produced ~500 bogus suggestions from ~460 real emails
+    against a real inbox. Comparing against the email's own status event
+    instead, there should be no suggestion here: the re-extraction ("applied")
+    matches exactly what this email originally recorded, even though the
+    application has since moved on to "rejected" via a later email.
+    """
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="applied",
+        event_date=datetime(2026, 1, 1),
+        source_email_id="msg-1",
+    )
+    # A later email moved the application on to "rejected" - current_status
+    # is now "rejected", but msg-1's own event.status is still "applied".
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="rejected",
+        event_date=datetime(2026, 1, 5),
+        source_email_id="msg-2",
+    )
+    repo.mark_processed(session, "msg-1", classification="relevant", pipeline_run_id="old-run")
+    run_id = _run(session)
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
+
+    stats = process_full_scan([_email()], model=model, session=session, sources=get_sources(), run_id=run_id)
+
+    assert stats["suggestions_created"] == 0
+    assert session.exec(select(ReviewSuggestion)).all() == []
+
+
+def test_full_scan_does_not_duplicate_suggestion_across_repeated_runs(session):
+    """Regression test: nothing prevented a second full-scan run (or a
+    crashed run re-run) from re-flagging the same email again, piling up
+    duplicate ReviewSuggestion rows for the same disagreement every time a
+    scan runs.
+    """
+    application = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="applied",
+        event_date=datetime(2026, 1, 1),
+        source_email_id="msg-1",
+    )
+    repo.mark_processed(session, "msg-1", classification="relevant", pipeline_run_id="old-run")
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="rejected")
+
+    run_id_1 = _run(session, run_id="run-1")
+    first = process_full_scan([_email()], model=model, session=session, sources=get_sources(), run_id=run_id_1)
+    run_id_2 = _run(session, run_id="run-2")
+    second = process_full_scan([_email()], model=model, session=session, sources=get_sources(), run_id=run_id_2)
+
+    assert first["suggestions_created"] == 1
+    assert second["suggestions_created"] == 0
+    assert len(session.exec(select(ReviewSuggestion)).all()) == 1
+
+
+def test_full_scan_emails_relevant_excludes_attempted_but_irrelevant_extractions(session):
+    """Regression test: emails_relevant used to just reuse emails_extracted
+    (count of emails where extraction was attempted), conflating "scrutiny
+    let it through" with "genuinely a real application email" - an email
+    can pass scrutiny (heuristic or LLM) and still come back irrelevant from
+    classify_and_extract itself.
+    """
+    repo.mark_processed(session, "msg-1", classification="irrelevant", pipeline_run_id="old-run")
+    run_id = _run(session)
+    # Narrow confirmation phrase -> heuristic scrutiny passes immediately
+    # (no ambiguous-case LLM call), so is_relevant=False here reflects
+    # classify_and_extract's own verdict, not the scrutiny node's.
+    model = _model(is_relevant=False)
+
+    stats = process_full_scan(
+        [_email(subject="Thank you for your application at Acme")],
+        model=model,
+        session=session,
+        sources=get_sources(),
+        run_id=run_id,
+    )
+
+    assert stats["emails_relevant"] == 0
+    assert stats["suggestions_created"] == 0
 
 
 def test_full_scan_tracks_progress_on_pipeline_run(session):

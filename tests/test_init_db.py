@@ -38,6 +38,7 @@ def test_init_db_on_fresh_database_includes_pipeline_run_progress_columns(tmp_pa
         assert run.emails_written == 0
         assert run.updated_at is not None
         assert run.run_type == "incremental"
+        assert run.suggestions_created == 0
 
 
 def test_init_db_migrates_existing_database_missing_progress_columns(tmp_path: Path):
@@ -83,6 +84,7 @@ def test_init_db_migrates_existing_database_missing_progress_columns(tmp_path: P
         "emails_written",
         "updated_at",
         "run_type",
+        "suggestions_created",
     } <= columns
 
     with get_session(db_path) as session:
@@ -94,3 +96,4 @@ def test_init_db_migrates_existing_database_missing_progress_columns(tmp_path: P
         assert old_run.emails_written == 0
         assert old_run.emails_total is None
         assert old_run.run_type == "incremental"
+        assert old_run.suggestions_created == 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,8 @@ from applysync.db import repository as repo
 from applysync.db.models import PipelineRun
 from applysync.pipeline.full_scan import full_scan as _default_full_scan
 from applysync.pipeline.graph import run_sync as _default_run_sync
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
@@ -50,7 +53,14 @@ def get_full_scan():
 def _run_in_background(fn, settings: Settings) -> None:
     try:
         fn(settings)
-    except Exception as exc:  # noqa: BLE001 - surfaced via /status, must not crash the background thread silently
+    except Exception as exc:  # noqa: BLE001 - must not crash the background thread silently
+        # logger.exception (not .warning/.error) captures the full traceback -
+        # this was previously missing entirely, so a background sync/full-scan
+        # failure left no trace anywhere except the generic message in
+        # _state["last_error"], which the dashboard only ever shows as a
+        # plain-language toast. The real cause needs to be visible in the
+        # server terminal for anyone actually debugging a failed run.
+        logger.exception("Background %s failed", fn.__name__)
         with _lock:
             _state["last_error"] = str(exc)
     finally:

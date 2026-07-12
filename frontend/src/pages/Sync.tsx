@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getSyncStatus, postFullScan, type PipelineRun } from '../lib/api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -29,6 +30,32 @@ function runStatusLabel(run: PipelineRun): string {
 
 function runTypeLabel(runType: string): string {
   return runType === 'full_scan' ? 'Full scan' : 'Sync'
+}
+
+function FinishedSummary({ run }: { run: PipelineRun }) {
+  if (run.run_type === 'full_scan') {
+    // A full scan never creates applications/events directly - it only
+    // queues suggestions, so the number that actually answers "did this
+    // find anything" is suggestions_created, not applications/events counts
+    // (which are always 0 by design and would otherwise read as "nothing
+    // happened" even when there's real work waiting on the Review page).
+    if (run.suggestions_created === 0) {
+      return <>Full scan finished: {run.emails_relevant} relevant emails re-checked, nothing needed review.</>
+    }
+    return (
+      <>
+        Full scan finished: {run.suggestions_created} suggestion{run.suggestions_created === 1 ? '' : 's'} queued
+        for <Link to="/review" className="underline underline-offset-2 hover:no-underline">review</Link>, out of{' '}
+        {run.emails_relevant} relevant emails.
+      </>
+    )
+  }
+  return (
+    <>
+      Last sync finished: {run.applications_created} new, {run.events_created} updates from {run.emails_relevant}{' '}
+      relevant emails.
+    </>
+  )
 }
 
 export function Sync() {
@@ -99,7 +126,7 @@ export function Sync() {
                 ? `${runTypeLabel(data.current_run_type ?? 'incremental')} in progress...`
                 : run.errors
                   ? 'Last sync failed. Check the server terminal for details.'
-                  : `Last sync finished: ${run.applications_created} new, ${run.events_created} updates from ${run.emails_relevant} relevant emails.`}
+                  : <FinishedSummary run={run} />}
             </p>
           </div>
         )}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
@@ -12,6 +14,14 @@ from applysync.web.api import register_api_routes
 from applysync.web.gmail_oauth import register_gmail_oauth_routes
 from applysync.web.review import register_review_routes
 from applysync.web.sync import register_sync_routes
+
+# No handler was ever configured for this app's own loggers (gmail/client.py,
+# pipeline/nodes.py, web/sync.py all call logging.getLogger(__name__) but
+# nothing attached a handler to the root logger) - warnings/errors logged
+# anywhere in the app were silently going nowhere instead of the server
+# terminal. basicConfig is a no-op if a handler already exists, so this is
+# safe to call unconditionally at import time.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # The React frontend (frontend/) and this API run as two separate servers
 # (by design, not just during development), so CORS is needed rather than

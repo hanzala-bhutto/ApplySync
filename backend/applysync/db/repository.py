@@ -406,6 +406,7 @@ def finish_pipeline_run(
     applications_created: int,
     events_created: int,
     errors: str | None = None,
+    suggestions_created: int = 0,
 ) -> PipelineRun:
     run = session.get(PipelineRun, run_id)
     if run is None:
@@ -416,6 +417,7 @@ def finish_pipeline_run(
     run.applications_created = applications_created
     run.events_created = events_created
     run.errors = errors
+    run.suggestions_created = suggestions_created
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -434,6 +436,32 @@ def find_application_by_source_email(session: Session, message_id: str) -> Appli
     if event is None:
         return None
     return session.get(Application, event.application_id)
+
+
+def find_status_event_by_source_email(session: Session, message_id: str) -> StatusEvent | None:
+    """The specific status event a previously-processed email originally
+    created, if any. full_scan compares a fresh re-extraction against THIS
+    event's own status, not the application's current current_status -
+    current_status reflects whatever the most recent event says, which for
+    an application with more than one status transition (e.g. applied ->
+    interview -> rejected) would make re-scanning the original "applied"
+    email always look like a disagreement even though nothing is wrong.
+    """
+    statement = select(StatusEvent).where(StatusEvent.source_email_id == message_id)
+    return session.exec(statement).first()
+
+
+def has_pending_suggestion_for_message(session: Session, message_id: str) -> bool:
+    """Guards against duplicate suggestions piling up across repeated
+    full-scan runs - without this, running a full scan more than once (or
+    a scan that partially completes before crashing, since suggestions are
+    committed per-email as the loop proceeds) re-flags the same email every
+    time instead of recognizing it's already queued for review.
+    """
+    statement = select(ReviewSuggestion).where(
+        ReviewSuggestion.message_id == message_id, ReviewSuggestion.status == "pending"
+    )
+    return session.exec(statement).first() is not None
 
 
 def create_review_suggestion(
@@ -546,3 +574,20 @@ def reject_review_suggestion(session: Session, suggestion_id: int) -> ReviewSugg
     session.commit()
     session.refresh(suggestion)
     return suggestion
+
+
+def reject_all_pending_suggestions(session: Session) -> int:
+    """Bulk dismiss, for clearing out a backlog in one action (e.g. after a
+    bug in an earlier full-scan run flooded the queue with false positives -
+    rejecting doesn't touch any Application/StatusEvent data, it only
+    resolves the suggestion rows themselves). Returns how many were
+    rejected.
+    """
+    pending = list_pending_review_suggestions(session)
+    now = _utcnow()
+    for suggestion in pending:
+        suggestion.status = "rejected"
+        suggestion.reviewed_at = now
+        session.add(suggestion)
+    session.commit()
+    return len(pending)
