@@ -95,6 +95,22 @@ export async function mockApi(page: Page) {
     await route.fulfill({ json: makeApplication({ job_title: 'Re-extracted Title' }) })
   })
 
+  await page.route('**/api/applications/*/research*', async (route) => {
+    await route.fulfill({
+      json: {
+        company_name: 'Acme Corp',
+        summary: 'Acme Corp builds industrial widgets and automation hardware.',
+        industry: 'Industrial manufacturing',
+        company_size: '1001-5000',
+        headquarters: 'Cupertino, USA',
+        website: 'https://acme.example',
+        recent_news: 'Announced a new automation division last quarter.',
+        source_urls: ['https://acme.example', 'https://news.example/acme'],
+        researched_at: '2026-07-12T09:00:00Z',
+      },
+    })
+  })
+
   await page.route('**/api/status-events/*/email', async (route) => {
     await route.fulfill({
       json: {
