@@ -76,6 +76,24 @@ test('timeline row reveals the original source email for verification', async ({
   await expect(page.getByText('noreply@acme.example')).toBeHidden()
 })
 
+test('company research card fetches and shows a web-sourced profile', async ({ page }) => {
+  await page.goto('/applications/1')
+
+  // The card is clearly labeled as web-sourced, not email-extracted data.
+  await expect(page.getByText('from the web')).toBeVisible()
+
+  await page.getByRole('button', { name: /Research Acme Corp/ }).click()
+
+  await expect(page.getByText('Acme Corp builds industrial widgets')).toBeVisible()
+  await expect(page.getByText('Industrial manufacturing')).toBeVisible()
+  await expect(page.getByText('Announced a new automation division last quarter.')).toBeVisible()
+  // Sources are exposed for human verification.
+  await page.getByText(/Sources \(2\)/).click()
+  await expect(page.getByRole('link', { name: 'news.example/acme' })).toBeVisible()
+  // After a successful research the button becomes a Refresh affordance.
+  await expect(page.getByRole('button', { name: 'Refresh' })).toBeVisible()
+})
+
 test('detail page has no detectable accessibility violations', async ({ page }) => {
   await page.goto('/applications/1')
   await expect(page.getByRole('heading', { name: 'Acme Corp' })).toBeVisible()
