@@ -7,6 +7,7 @@ An email-driven job application tracker that pulls your applications out of your
 - [Motivation](#motivation)
 - [Tech Stack](#tech-stack)
 - [Features](#features)
+- [Screenshots](#screenshots)
 - [Architecture](#architecture)
 - [LangGraph Decision Making](#langgraph-decision-making)
 - [Data Flow](#data-flow)
@@ -53,6 +54,20 @@ What is actually working today:
 - **Playwright end-to-end tests** with an `@axe-core/playwright` accessibility check on every page
 
 Not built yet, see [Roadmap](#roadmap): automatic/scheduled syncing and observability tracing/evals.
+
+## Screenshots
+
+Rendered from the Playwright end-to-end suite's mocked fixtures, so they use
+example data ("Acme Corp", "Globex"), not a real inbox. Regenerate with
+`SCREENSHOTS=1 npx playwright test screenshots.spec.ts` in `frontend/`.
+
+**Application pipeline** - a Kanban board grouped by status, with follow-up reminders:
+
+![The ApplySync dashboard: a Kanban pipeline board grouped by application status, with a follow-up reminders section](docs/screenshots/dashboard.png)
+
+**Application detail with company research** - the web-research card is clearly labeled as web-sourced and kept separate from the email-extracted fields above it, with source links for verification:
+
+![An application detail page showing the extracted fields, a status timeline, and a sky-blue company research card labeled 'from the web' with summary, industry, size, headquarters, website, and recent news](docs/screenshots/application-detail.png)
 
 ## Architecture
 
