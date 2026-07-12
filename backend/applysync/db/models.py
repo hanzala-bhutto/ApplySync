@@ -87,6 +87,34 @@ class PipelineRun(SQLModel, table=True):
     run_type: str = "incremental"
 
 
+class CompanyProfile(SQLModel, table=True):
+    """Web-researched profile for a company, cached and shared across every
+    application at that company. Deliberately a SEPARATE table from
+    Application: this is web-sourced ("the internet suggested this"), never to
+    be mixed with the email-extracted facts on Application ("the company told
+    me this"). source_urls is kept so a human can verify every claim.
+    """
+
+    # Lowercased company name as the cache key, so "EGYM" and "egym" share one
+    # profile. The display name the research ran against is kept separately.
+    company_key: str = Field(primary_key=True)
+    display_name: str
+    summary: str | None = None
+    industry: str | None = None
+    company_size: str | None = None
+    headquarters: str | None = None
+    website: str | None = None
+    # Free-text note on recent news (kept as plain text, not a list: the model
+    # that produces it reliably returns text but returns empty for list-typed
+    # structured output - see research/company.py).
+    recent_news: str | None = None
+    # JSON-encoded list of the source result URLs the synthesis was grounded
+    # in, so a human can verify every claim (store-JSON-as-str pattern, same as
+    # ReviewSuggestion's *_extract_json).
+    source_urls_json: str | None = None
+    researched_at: datetime = Field(default_factory=_utcnow)
+
+
 class ReviewSuggestion(SQLModel, table=True):
     """A full-scan run's proposed change, never auto-applied: re-running
     today's pipeline against an already-processed email can disagree with
