@@ -796,7 +796,35 @@ merged into `Application`. Locked with the user, ordered by dependency:
       up: an OS-level scheduled task (Windows Task Scheduler) running
       `applysync sync` once a day, independent of whether the dashboard/API
       server is open.
-- [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
+- [ ] M5: Reliability push (phase 2, now active - the user explicitly chose
+      reliability over new features after a full-history resync surfaced the
+      status-ordering bug, the process-step-title extraction bug, and a real
+      disambiguation wrong-merge). Agreed order, each its own feasibility
+      report + issue + PR:
+      1. [x] Eval harness + gold dataset (issue #68): `backend/applysync/
+         evaluation/scoring.py` (pure metric logic), `backend/scripts/
+         build_eval_dataset.py` (150 samples from the real inbox, labels
+         pre-filled from the pipeline's own stored output, human-verified
+         before they count), `eval/run_eval.py` (replays verified samples
+         through the real scrutiny + classify_and_extract nodes; per-stage
+         metrics: scrutiny false-reject rate with a zero budget, relevance
+         accuracy, per-field extraction accuracy using matching's own
+         normalization; `--strict` for use as a pre-merge gate). Samples
+         hold real email bodies, so `eval/samples/*.jsonl` is gitignored -
+         regenerable locally, never committed. **The recorded baseline only
+         exists after the user's label-verification pass over gold.jsonl**;
+         numbers from unverified labels just measure the pipeline against
+         its own past output. Matching/dedupe (merge precision/recall) eval
+         is a documented follow-up - it needs seeded DB state per sample.
+      2. [ ] Langfuse observability, self-hosted (NOT LangSmith: hosted SaaS
+         would ship email bodies off-machine, contradicting the local-first
+         keyless design; Langfuse runs in docker-compose next to SearXNG).
+      3. [ ] Confidence-routed merges: agent verdicts below a confidence bar
+         become ReviewSuggestions (table + approve/reject UI already exist)
+         instead of applying silently.
+      4. [ ] Tiered models: keep nano for high-volume extraction, larger
+         model for the low-volume disambiguation agent (~50 calls per full
+         sync vs 500), verified against the eval baseline from step 1.
 
 ## Feature workflow
 
