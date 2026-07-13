@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Literal
@@ -35,9 +36,28 @@ UNSPECIFIED_JOB_TITLE = "(unspecified role)"
 # instruction alone. Checked case-insensitively.
 _PLACEHOLDER_JOB_TITLES = {"not specified", "unknown", "n/a", "none", "null", "unspecified"}
 
+# Defense-in-depth for the same failure the STEP 3 prompt guidance targets:
+# despite being told not to, the model sometimes extracts the TYPE of
+# interview/process step (real examples: "Technical Interview", "AI
+# interview", "AI-powered video interview", "Online Assessment") as the
+# job_title, rather than the actual role. Matches only when the ENTIRE title
+# is qualifier + process words, so a real title that happens to contain one
+# of these words (e.g. "AI Integration Engineer") is untouched - the
+# "engineer" noun keeps it from matching the pattern below.
+_PROCESS_STEP_JOB_TITLE_RE = re.compile(
+    r"^((technical|phone|video|online|initial|first\s*round|ai[- ]?(powered)?)\s+)*"
+    r"(interview|assessment|screening|call)s?$",
+    re.IGNORECASE,
+)
+
 
 def _normalize_job_title(job_title: str | None) -> str:
-    if not job_title or job_title.strip().lower() in _PLACEHOLDER_JOB_TITLES:
+    if not job_title:
+        return UNSPECIFIED_JOB_TITLE
+    stripped = job_title.strip()
+    if stripped.lower() in _PLACEHOLDER_JOB_TITLES:
+        return UNSPECIFIED_JOB_TITLE
+    if _PROCESS_STEP_JOB_TITLE_RE.match(stripped):
         return UNSPECIFIED_JOB_TITLE
     return job_title
 
@@ -66,8 +86,16 @@ company_name, that is the messenger, not the employer. Leave company_name null i
 confirmation text genuinely never states the actual employer anywhere, do not fall back to the
 platform's name just to fill the field.
 
-STEP 3 - job_title: the role applied for, or null if the email genuinely never repeats it (do not
-invent placeholder text like "not specified").
+STEP 3 - job_title: the role YOU applied for, or null if the email genuinely never repeats it (do
+not invent placeholder text like "not specified"). Two real mistakes to avoid:
+- Never extract the TYPE of process step (e.g. "Technical Interview", "Phone Screening",
+  "AI-powered video interview", "Online Assessment") as the job_title - that describes a STAGE of
+  the process, not the role itself.
+- Never extract a PERSON's own job title from a signature or "who you'll speak with" line (e.g. an
+  email signed "Jane Doe, Werkstudentin People Operations, HR" or "your recruiter, Talent
+  Acquisition") - that is the interviewer/recruiter's role, not the role you applied for.
+If the actual applied-for role is not restated in this email, leave job_title null - do not
+substitute either of the above.
 
 STEP 4 - status: the MOST CONSERVATIVE option the email text unambiguously supports. Default to
 "applied" for a generic acknowledgement ("we received it", "we will review and contact you") with

@@ -76,6 +76,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _as_aware_utc(dt: datetime) -> datetime:
+    """Existing event_date values are a mix of timezone-aware (parsed from an
+    email's Date header) and naive (_utcnow(), assumed UTC) - safe to compare
+    only after normalizing both to the same awareness. Does not change what
+    gets stored, only what's compared."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 def is_processed(session: Session, message_id: str) -> bool:
     return session.get(ProcessedEmail, message_id) is not None
 
@@ -204,6 +212,23 @@ def add_status_event(
     raw_extract_json: str | None = None,
     notes: str | None = None,
 ) -> StatusEvent:
+    """current_status only advances to this event's status if it is the
+    latest by event_date, not simply whichever event happened to be
+    processed most recently. Gmail's search API returns results newest-
+    first, not chronologically, so a full/historical sync processes many
+    emails for the same application in an arbitrary order within one run -
+    without this check, current_status would end up reflecting whichever
+    email was processed LAST (often the oldest one), not the true latest
+    status. Confirmed for real: a full resync left an application's
+    current_status stuck on "applied" despite chronologically later
+    "rejected" and "interview" events already on record. Manual corrections
+    (set_manual_status) always use event_date=now, so they always win
+    regardless of this check.
+    """
+    existing_latest = session.exec(
+        select(func.max(StatusEvent.event_date)).where(StatusEvent.application_id == application_id)
+    ).one()
+
     event = StatusEvent(
         application_id=application_id,
         status=status,
@@ -215,7 +240,8 @@ def add_status_event(
     session.add(event)
 
     application = session.get(Application, application_id)
-    if application is not None:
+    is_latest = existing_latest is None or _as_aware_utc(event_date) >= _as_aware_utc(existing_latest)
+    if application is not None and is_latest:
         application.current_status = status
         application.updated_at = _utcnow()
         session.add(application)
