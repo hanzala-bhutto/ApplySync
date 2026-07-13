@@ -18,6 +18,10 @@ token.json
 *.sqlite
 *.sqlite3
 
+# Eval gold dataset holds real email bodies (PII) - regenerable via
+# backend/scripts/build_eval_dataset.py, never committed.
+eval/samples/*.jsonl
+
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
