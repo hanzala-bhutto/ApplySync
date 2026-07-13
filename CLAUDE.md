@@ -158,23 +158,24 @@ is crash-recovery only.
    inconsistent placeholders used to silently create duplicate application
    rows instead of deduping to one.
 2. `match_existing_application`: new vs. update-existing vs. duplicate.
-   Heuristic match via `repository.find_matching_application`: company+title+
+   Heuristic-first via `repository.find_matching_application`: company+title+
    platform, normalized (lowercase, whitespace, legal suffixes like SE/GmbH/
    Inc/Ltd/AG/Co/LLC/Corp stripped) so e.g. "EGYM" and "EGYM SE" from two
    emails for the same application still match. Found necessary after a real
    pair of EGYM confirmation emails extracted with different suffixes
    created two application rows instead of one; normalization is for
-   matching only, original casing is still stored/displayed.
-   **Known remaining gap**: a missing job_title vs. a genuinely different
-   job_title are not the same kind of mismatch, but the heuristic can't tell
-   them apart (seen for real: two Nagarro applications, one with an actual
-   title and one where the title just wasn't extracted, correctly did NOT
-   dedupe, but it's unclear if that's actually right). Disambiguating that
-   needs real judgment (date proximity, an LLM asking "same application?"),
-   which is the LLM-fallback-for-ambiguous-matches idea from the original
-   design, still not implemented. Don't attempt a bigger fuzzy-matching
-   rewrite without a concrete case in hand; note more real examples here as
-   they show up.
+   matching only, original casing is still stored/displayed. An exact-title
+   hit resolves immediately (`update_existing`); no candidate at all is
+   `new_application`. **The former missing-title-vs-different-title gap** (a
+   missing job_title vs. a genuinely different one look identical to the
+   heuristic - the real Nagarro pair) **is now handled by the disambiguation
+   agent**: when the exact-title match misses but same-company+platform
+   candidates exist (`repo.find_candidate_applications`), the node emits
+   `candidate_ids` and leaves `match` unset, and a conditional edge routes to
+   `disambiguate_match` (the LLM tool-loop agent, see the milestone entry for
+   Entity/duplicate resolution and `research/disambiguate.py`) instead of
+   blindly creating a new row. The agent fails open to `new_application`, so a
+   degraded run or missing clients never blocks the pipeline.
 3. `upsert_db`: deterministic, no LLM. Always calls `mark_processed`
    regardless of new/update/duplicate_skip.
 4. `mark_irrelevant` / `mark_extraction_failed`: both just call
@@ -675,28 +676,52 @@ can pick any of them up cold. **Shared, already in place**: SearXNG
 (`backend/applysync/search/client.py`, `get_search_client` DI), and the
 grounded-synthesis pattern (`backend/applysync/research/company.py`). **Two
 load-bearing constraints that apply to every one of these** (learned the hard
-way, do not relitigate): (1) this model needs `PydanticOutputParser` over
-plain-text output with **flat scalar-only** schemas - `with_structured_output`
-returns empty once a schema has any list field; (2) web-sourced data stays in
-its own table/response model/card, never merged into `Application`. Locked with
-the user, ordered by dependency:
+way, do not relitigate): (1) for **structured output**, this model needs
+`PydanticOutputParser` over plain-text output with **flat scalar-only** schemas
+- `with_structured_output` returns empty once a schema has any list field.
+**But native tool-calling (`bind_tools`) IS reliable for scalar-arg tools**
+(verified live while building entity resolution), so an agent can bind tools
+and end on a terminal "submit" tool call rather than parsing plain text - see
+`research/disambiguate.py`. Keep tool args scalar; don't put list-typed args on
+a tool. (2) web-sourced data stays in its own table/response model/card, never
+merged into `Application`. Locked with the user, ordered by dependency:
 
-- [ ] **Entity/duplicate resolution (do first - the first genuinely agentic
-      feature).** New conditional branch off `match_existing_application` in
-      `pipeline/graph.py`: when a candidate exists but fields conflict (the
-      documented missing-title vs different-title gap, e.g. the Nagarro/EGYM
-      cases) route to a disambiguation agent instead of the current heuristic
-      guess. Agent = an LLM tool-loop (`create_react_agent` or a hand-rolled
-      loop with a loop-continuation router that checks
-      `state["messages"][-1].tool_calls`) with tools: search the DB for
-      candidates (`repo.find_matching_application` / new query helpers), read an
-      application's status history, fetch+diff the two source emails
-      (`GmailClient.get_message`), and a SearXNG search to confirm real-world
-      entity identity. Returns a structured `MatchDecision`. Keep the
-      `processed_emails` idempotency guard intact; note the non-determinism/cost
-      tradeoff (only invoke the agent for genuinely ambiguous cases, never the
-      clear ones). This is the "workflow -> agent" step the README's LangGraph
-      section points at.
+- [x] **Entity/duplicate resolution (the first genuinely agentic feature;
+      issue #48).** Conditional branch off `match_existing_application` in
+      `pipeline/graph.py`: `make_match_node` now emits `candidate_ids` (same
+      company+platform, any title, via new `repo.find_candidate_applications`)
+      when the exact-title match misses but candidates exist - the documented
+      missing-title-vs-different-title gap (Nagarro/EGYM). A new conditional
+      edge routes that ambiguous case to `disambiguate_match`; clear new/update
+      cases go straight to `upsert_db` as before. The agent
+      (`backend/applysync/research/disambiguate.py`) is a **hand-rolled LLM tool
+      loop**, not `create_react_agent`: it binds tools (`get_status_history`,
+      `read_source_email` which fetch+diffs a candidate's source email vs. the
+      new one via `GmailClient.get_message`, `web_entity_check` over SearXNG)
+      and loops until the model calls a terminal `submit_verdict` tool (bounded
+      by `MAX_AGENT_TURNS=6` for the 40 RPM cap). The verdict maps onto the
+      existing `MatchDecision` (`same_application`->update_existing,
+      `different_application`->new_application, `duplicate`->duplicate_skip) and
+      its rationale is stored on the resulting status event's `notes` for
+      auditability. **Key model finding (verified live, updates the earlier
+      `with_structured_output` note): this model's native tool-calling IS
+      reliable for scalar-arg tools** - the documented brittleness is
+      list-field-specific to `with_structured_output`, so the agent uses scalar
+      tool args throughout (including the verdict) rather than plain-text
+      parsing. Fails **open** to a new application on any agent/search/LLM error
+      (recoverable, unlike a wrong merge), mirroring `scrutinize_relevance`.
+      `gmail_client`/`search_client` are threaded into `build_graph` as optional
+      deps; without them (unit tests, degraded runs) the ambiguous case falls
+      open instead of routing to the agent. No new DB columns (`notes` already
+      existed); `processed_emails` idempotency guard intact (`upsert_db` still
+      marks every path processed exactly once, and a missing `match` defaults to
+      new_application there). Tested in `tests/test_disambiguate.py` (10 tests:
+      the tool loop, each verdict->MatchDecision mapping, fail-open, ambiguous-
+      routes-to-agent vs. clear-cases-don't, idempotency double-run). Known
+      remaining gap: not yet verified against the real inbox - per this
+      project's history (EGYM dedupe, pagination cap, lookback buffer), the
+      reject/ambiguous edges only surface against real data, so do a live sync
+      before fully trusting the agent's judgment on real ambiguous pairs.
 - [ ] **Company-alias canonicalization.** Resolve a company's official name +
       known aliases via search, store a mapping (new `canonical_name`/alias
       table + `repo` apply helpers). Apply at match time and as a one-off batch

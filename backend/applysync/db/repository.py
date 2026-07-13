@@ -53,6 +53,25 @@ def mark_processed(
     session.commit()
 
 
+def find_candidate_applications(
+    session: Session, *, company_name: str, platform: str
+) -> list[Application]:
+    """Every application for the same company + platform (normalized: case,
+    whitespace, legal suffixes), regardless of job_title. This is the candidate
+    set the disambiguation agent reasons over when the exact-title match in
+    find_matching_application misses but the company clearly already exists on
+    record - the documented missing-title-vs-different-title gap. Kept separate
+    so find_matching_application stays the fast exact-title path.
+
+    Normalization happens in Python, not SQL, since matching scans candidates
+    for the platform rather than doing an exact-equality WHERE - fine at this
+    project's scale (a personal application tracker, not a high-volume table).
+    """
+    target_company = _normalize_for_matching(company_name)
+    candidates = session.exec(select(Application).where(Application.platform == platform)).all()
+    return [c for c in candidates if _normalize_for_matching(c.company_name) == target_company]
+
+
 def find_matching_application(
     session: Session, company_name: str, job_title: str, platform: str
 ) -> Application | None:
@@ -60,22 +79,14 @@ def find_matching_application(
     whitespace, legal suffixes) so e.g. "EGYM" and "EGYM SE" from two emails
     for the same application still match. Remaining ambiguous cases (real
     near-duplicates, renamed titles) are the LLM-fallback's job in the
-    match_existing_application pipeline node, not this function.
-
-    Normalization happens in Python, not SQL, since matching now scans
-    candidates for the platform rather than doing an exact-equality WHERE -
-    fine at this project's scale (a personal application tracker, not a
-    high-volume table).
+    match_existing_application pipeline node (see find_candidate_applications),
+    not this function.
     """
-    target_company = _normalize_for_matching(company_name)
     target_title = _normalize_for_matching(job_title)
-
-    candidates = session.exec(select(Application).where(Application.platform == platform)).all()
-    for candidate in candidates:
-        if (
-            _normalize_for_matching(candidate.company_name) == target_company
-            and _normalize_for_matching(candidate.job_title) == target_title
-        ):
+    for candidate in find_candidate_applications(
+        session, company_name=company_name, platform=platform
+    ):
+        if _normalize_for_matching(candidate.job_title) == target_title:
             return candidate
     return None
 

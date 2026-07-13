@@ -58,6 +58,40 @@ class MatchDecision(BaseModel):
     application_id: int | None = None
 
 
+class DisambiguationVerdict(BaseModel):
+    """The disambiguation agent's structured decision for an ambiguous match
+    (a candidate exists for the same company+platform but the title doesn't
+    match exactly - the documented Nagarro/EGYM gap).
+
+    Flat scalar fields only. Built from the agent's terminal `submit_verdict`
+    tool call (see research/disambiguate.py), NOT with_structured_output -
+    which returns empty on this model once a schema has any list field (the
+    same hard-won constraint as CompanyProfileResult). Native tool-calling
+    with scalar args is reliable on this model (verified), so the agent's
+    tools, including this verdict, use scalar args throughout.
+    Maps onto MatchDecision in the disambiguate node:
+      same_application      -> update_existing (application_id required)
+      different_application -> new_application
+      duplicate             -> duplicate_skip  (application_id required)
+    """
+
+    decision: Literal["same_application", "different_application", "duplicate"] = Field(
+        description="same_application: this email is a status update for an existing "
+        "application. different_application: a genuinely separate application at the "
+        "same company. duplicate: a redundant re-confirmation of an existing "
+        "application that should NOT create a new row or a new status event."
+    )
+    matched_application_id: int | None = Field(
+        default=None,
+        description="The id of the existing application this matches. Required when "
+        "decision is same_application or duplicate; null for different_application.",
+    )
+    reasoning: str = Field(
+        description="One or two sentences explaining the decision, stored so a human "
+        "can see why the pipeline deduped or split these applications."
+    )
+
+
 class RelevanceOnlyResult(BaseModel):
     """Structured-output schema for scrutinize_relevance's cheap ambiguous-case
     LLM call - just a bool, not the full extraction schema, since this call
@@ -83,5 +117,14 @@ class EmailState(TypedDict, total=False):
     scrutiny: Literal["pass", "reject"]
     classification: Literal["relevant", "irrelevant"]
     extracted: JobApplicationEvent | None
+    # Set by match_existing_application ONLY for the ambiguous case (a
+    # same-company+platform candidate exists but no exact title match): the ids
+    # the disambiguate node reasons over. Left unset (and match left None) is
+    # the routing signal that disambiguation is needed.
+    candidate_ids: list[int] | None
     match: MatchDecision | None
+    # The disambiguation agent's rationale, when this email went through it -
+    # stored on the resulting status event's notes so a human can see why the
+    # pipeline deduped or split the applications.
+    disambiguation_reasoning: str | None
     error: str | None
