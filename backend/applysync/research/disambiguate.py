@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 # A single ambiguous email should never fan out into an unbounded number of
 # rate-limited LLM calls (NVIDIA free tier is 40 RPM). This caps the agent's
 # tool-gathering turns; if it hasn't submitted a verdict by then it's forced
-# to decide from what it has (see run_disambiguation).
-MAX_AGENT_TURNS = 6
+# to decide from what it has (see run_disambiguation). Raised from 6 to 8
+# after a real full-history resync showed ~25% of ambiguous cases hitting the
+# old limit and failing open (safe, but an avoidable extra row) - largely
+# from the model repeating web_entity_check for the same query instead of
+# using the cheaper, more directly relevant get_status_history/
+# read_source_email first (see the system prompt's tool-ordering guidance,
+# added alongside this bump).
+MAX_AGENT_TURNS = 8
 
 # Source emails and search snippets can be long; the model only needs enough to
 # tell "same application" from "different application", not the whole payload.
@@ -63,10 +69,16 @@ The NEW email being classified:
 Existing candidate applications at this company/platform:
 {candidates}
 {title_less_guidance}
-Use the tools to inspect a candidate's status history, read the source email a \
-candidate came from (to compare against the new email above), or check the \
-company on the web if real-world identity is in doubt. When you are confident, \
-call submit_verdict exactly once with:
+Start with get_status_history and/or read_source_email for the candidate(s) \
+above - they answer the actual question (is this a status update for one of \
+them?) directly and immediately satisfy the evidence requirement below. Only \
+use web_entity_check afterward, and only if the company's real-world identity \
+is itself in doubt (e.g. two similarly-named but possibly-different \
+companies) - it does not tell you whether two job postings are the same role,
+so it does not substitute for the tools above and should not be your first \
+move. You have a limited number of turns; do not call web_entity_check more \
+than once for the same query. When you are confident, call submit_verdict \
+exactly once with:
   - decision: "same_application" if the new email is a status update for one of \
 the candidates; "different_application" if it is a genuinely separate role; \
 "duplicate" if it is a redundant re-confirmation of a candidate that should NOT \
@@ -76,7 +88,19 @@ create a new row.
   - reasoning: one or two sentences on why.
 
 Prefer "different_application" only when the evidence genuinely points to a \
-separate role - a missing title alone is not proof of a different application.
+separate role - a MISSING title alone is not proof of a different application. \
+But when a title IS present on both sides, do not wave away a real difference \
+as "slightly different wording" just because the company and rough date match \
+- company and date alone are NOT sufficient evidence that two differently- \
+worded titles are the same role. A real mistake seen before: three emails at \
+one company for "Backend Engineer - Pricing", "Software Engineer - Trading \
+Systems", and "Werkstudentin People Operations, HR" were wrongly merged into \
+one application, reasoning that the titles "differed slightly" - they name \
+three different roles/departments, not one role worded three ways. Only treat \
+differing titles as the same role when the difference is clearly cosmetic: \
+formatting, an added qualifier like "(Senior)", language, or an ATS reference \
+code/suffix. A different specialization, department, or seniority track named \
+in the title is a different role, not a wording variation.
 
 A "same_application" or "duplicate" verdict merges data into an existing row - \
 that is much harder to undo than creating an extra one, so it requires real \

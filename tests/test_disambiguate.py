@@ -363,6 +363,32 @@ def test_different_application_verdict_needs_no_evidence(session):
     assert verdict.decision == "different_application"
 
 
+def test_prompt_warns_against_dismissing_substantive_title_differences(session):
+    """Regression: a real full-history resync showed the agent merging
+    genuinely different roles at one company ("Backend Engineer - Pricing",
+    "Software Engineer - Trading Systems", "Werkstudentin People Operations,
+    HR") into one application, rationalizing each as "the title differing
+    slightly". Structural check that the sharpened guidance survives future
+    prompt edits.
+    """
+    app = _seed_application(session)
+    model = FakeToolLoopModel([_verdict_call("different_application", 0)])
+
+    run_disambiguation(
+        _current_email(),
+        _extracted(),
+        [app],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "company and date alone are NOT sufficient evidence" in system_prompt
+    assert "different specialization, department, or seniority track" in system_prompt
+
+
 def test_agent_never_submitting_raises_after_turn_limit(session):
     app = _seed_application(session)
     prose = [FakeAIResponse(content="thinking...") for _ in range(MAX_AGENT_TURNS)]
