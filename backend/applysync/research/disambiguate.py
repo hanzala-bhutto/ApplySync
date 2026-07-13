@@ -76,7 +76,16 @@ create a new row.
   - reasoning: one or two sentences on why.
 
 Prefer "different_application" only when the evidence genuinely points to a \
-separate role - a missing title alone is not proof of a different application."""
+separate role - a missing title alone is not proof of a different application.
+
+A "same_application" or "duplicate" verdict merges data into an existing row - \
+that is much harder to undo than creating an extra one, so it requires real \
+evidence, not just a plausible guess from the company/title alone. Before \
+submitting either of those two decisions, you MUST first call \
+get_status_history or read_source_email for the SPECIFIC candidate id you are \
+about to name as matched_application_id; submitting without having done so for \
+that exact id will be rejected. "different_application" has no such \
+requirement - it is always safe to submit directly."""
 
 
 def _title_less_guidance(extracted: JobApplicationEvent, candidates: list[Application]) -> str:
@@ -153,12 +162,22 @@ def run_disambiguation(
     """
     candidate_by_id = {c.id: c for c in candidates}
 
+    # A same_application/duplicate verdict merges data into an existing row -
+    # much harder to undo than an extra row - so it must be backed by the
+    # agent actually having looked at real evidence at least once, not just a
+    # plausible-sounding guess (the documented "shaky/hallucinated reasoning"
+    # reliability gap). Tracks which candidate ids an evidence tool was
+    # actually invoked for; a bad/unknown application_id (caught below,
+    # before this is recorded) does not count as evidence gathered.
+    evidence_gathered: set[int] = set()
+
     @tool
     def get_status_history(application_id: int) -> str:
         """Return the status-change history (status, date, source) for a candidate
         application id, oldest first."""
         if application_id not in candidate_by_id:
             return f"error: {application_id} is not one of the candidate ids"
+        evidence_gathered.add(application_id)
         events = repo.application_timeline(session, application_id)
         if not events:
             return "no status events recorded"
@@ -176,6 +195,7 @@ def run_disambiguation(
         and a truncated body."""
         if application_id not in candidate_by_id:
             return f"error: {application_id} is not one of the candidate ids"
+        evidence_gathered.add(application_id)
         events = repo.application_timeline(session, application_id)
         source_id = next(
             (e.source_email_id for e in reversed(events) if e.source_email_id), None
@@ -215,6 +235,13 @@ def run_disambiguation(
         """Submit the final decision. decision is one of same_application,
         different_application, duplicate. matched_application_id is the candidate id
         for same_application/duplicate, or 0 for different_application."""
+        if decision in ("same_application", "duplicate") and matched_application_id not in evidence_gathered:
+            return (
+                "rejected: a same_application/duplicate verdict requires calling "
+                "get_status_history or read_source_email for THIS candidate id "
+                f"({matched_application_id}) first - you have not done so yet. "
+                "Gather that evidence, then resubmit."
+            )
         submitted["verdict"] = (decision, matched_application_id, reasoning)
         return "verdict recorded"
 

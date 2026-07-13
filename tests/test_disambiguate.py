@@ -22,6 +22,7 @@ from applysync.pipeline.state import ClassifyAndExtractResult, JobApplicationEve
 from applysync.research.disambiguate import (
     MAX_AGENT_TURNS,
     DisambiguationError,
+    _build_verdict,
     run_disambiguation,
 )
 from tests.fakes import (
@@ -134,24 +135,6 @@ def _extracted(company="Nagarro", job_title=None):
     return JobApplicationEvent(company_name=company, job_title=job_title, status="applied")
 
 
-def test_agent_submits_same_application_verdict(session):
-    app = _seed_application(session)
-    model = FakeToolLoopModel([_verdict_call("same_application", app.id)])
-
-    verdict = run_disambiguation(
-        _current_email(),
-        _extracted(),
-        [app],
-        session=session,
-        gmail_client=FakeGmailClient(_RAW_MESSAGE),
-        search_client=FakeSearchClient(results=[]),
-        model=model,
-    )
-
-    assert verdict.decision == "same_application"
-    assert verdict.matched_application_id == app.id
-
-
 def test_agent_can_call_a_tool_before_submitting(session):
     """Multi-turn: the model inspects a candidate's history, then submits."""
     app = _seed_application(session)
@@ -192,6 +175,9 @@ def test_agent_recovers_from_bad_tool_args_instead_of_crashing(session):
                     {"name": "read_source_email", "args": {"application_id": "9543a4a3f5-not-an-int"}, "id": "t1"}
                 ]
             ),
+            FakeAIResponse(
+                tool_calls=[{"name": "read_source_email", "args": {"application_id": app.id}, "id": "t2"}]
+            ),
             _verdict_call("same_application", app.id),
         ]
     )
@@ -206,7 +192,7 @@ def test_agent_recovers_from_bad_tool_args_instead_of_crashing(session):
         model=model,
     )
 
-    assert model.invocations == 2  # errored call, then a successful verdict
+    assert model.invocations == 3  # errored call, corrected call, then a successful verdict
     assert verdict.decision == "same_application"
 
 
@@ -219,7 +205,14 @@ def test_title_less_email_prompt_biases_toward_most_recent_active_candidate(sess
     """
     stale = _seed_application(session, title="Backend Engineer", status="rejected")
     active = _seed_application(session, title="Frontend Engineer", status="interview")
-    model = FakeToolLoopModel([_verdict_call("same_application", active.id)])
+    model = FakeToolLoopModel(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": active.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", active.id),
+        ]
+    )
 
     run_disambiguation(
         _current_email(),
@@ -264,7 +257,14 @@ def test_title_less_email_prompt_has_no_single_lead_when_no_active_candidate(ses
 
 def test_normal_title_email_has_no_title_less_guidance(session):
     app = _seed_application(session)
-    model = FakeToolLoopModel([_verdict_call("same_application", app.id)])
+    model = FakeToolLoopModel(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": app.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", app.id),
+        ]
+    )
 
     run_disambiguation(
         _current_email(),
@@ -280,9 +280,31 @@ def test_normal_title_email_has_no_title_less_guidance(session):
     assert "does not name a job title" not in system_prompt
 
 
-def test_agent_hallucinated_id_raises(session):
+def test_hallucinated_id_raises_in_build_verdict(session):
+    """_build_verdict's own unknown-id validation, tested directly: with the
+    evidence-gathering requirement in place (see
+    test_submit_verdict_rejected_without_evidence_for_that_id), a hallucinated
+    id can no longer reach this point via the normal tool loop at all - the
+    gate in submit_verdict rejects it first, since evidence can only ever be
+    gathered for a REAL candidate id (get_status_history/read_source_email
+    themselves reject an unknown id before recording it as evidence). This
+    keeps _build_verdict's check as defense in depth for any future caller.
+    """
     app = _seed_application(session)
-    model = FakeToolLoopModel([_verdict_call("same_application", 999)])
+
+    with pytest.raises(DisambiguationError):
+        _build_verdict("same_application", 999, "because", {app.id: app})
+
+
+def test_submit_verdict_rejected_without_evidence_for_that_id(session):
+    """The core reliability fix: a same_application verdict for a candidate
+    the agent never actually looked at (no get_status_history/read_source_email
+    call for THAT id) is rejected, forcing the agent to gather evidence or
+    exhaust its turns and fail open - it can no longer merge from a plausible-
+    sounding guess alone.
+    """
+    app = _seed_application(session)
+    model = FakeToolLoopModel([_verdict_call("same_application", app.id)] * MAX_AGENT_TURNS)
 
     with pytest.raises(DisambiguationError):
         run_disambiguation(
@@ -294,6 +316,51 @@ def test_agent_hallucinated_id_raises(session):
             search_client=FakeSearchClient(results=[]),
             model=model,
         )
+
+
+def test_submit_verdict_accepted_after_gathering_evidence_for_that_id(session):
+    app = _seed_application(session)
+    model = FakeToolLoopModel(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": app.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", app.id),
+        ]
+    )
+
+    verdict = run_disambiguation(
+        _current_email(),
+        _extracted(),
+        [app],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    assert verdict.decision == "same_application"
+    assert verdict.matched_application_id == app.id
+
+
+def test_different_application_verdict_needs_no_evidence(session):
+    """different_application (creating a new row, not merging) is always
+    safe to submit directly - the evidence gate only applies to
+    same_application/duplicate."""
+    app = _seed_application(session)
+    model = FakeToolLoopModel([_verdict_call("different_application", 0)])
+
+    verdict = run_disambiguation(
+        _current_email(),
+        _extracted(),
+        [app],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    assert verdict.decision == "different_application"
 
 
 def test_agent_never_submitting_raises_after_turn_limit(session):
@@ -330,7 +397,14 @@ def test_ambiguous_email_different_application_creates_new_row(session):
 
 def test_ambiguous_email_same_application_updates_and_stores_reasoning(session):
     app = _seed_application(session)
-    model = _extract_model([_verdict_call("same_application", app.id, reasoning="Same role, title just missing")])
+    model = _extract_model(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": app.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", app.id, reasoning="Same role, title just missing"),
+        ]
+    )
 
     stats = _run_ambiguous(session, model)
 
@@ -345,7 +419,14 @@ def test_ambiguous_email_same_application_updates_and_stores_reasoning(session):
 
 def test_ambiguous_email_duplicate_writes_nothing(session):
     app = _seed_application(session)
-    model = _extract_model([_verdict_call("duplicate", app.id)])
+    model = _extract_model(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": app.id}, "id": "t1"}]
+            ),
+            _verdict_call("duplicate", app.id),
+        ]
+    )
 
     stats = _run_ambiguous(session, model)
 
