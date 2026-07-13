@@ -139,6 +139,22 @@ def test_classify_and_extract_placeholder_job_title_text_normalizes():
     assert output["extracted"].job_title == UNSPECIFIED_JOB_TITLE
 
 
+def test_classify_and_extract_status_word_job_title_normalizes():
+    """Regression: an interview-appointment email that never names the role had
+    job_title extracted as literally "Interview", creating a junk application
+    titled "Interview". A bare status word as a title must normalize to
+    unspecified so it dedupes to the real application by company instead.
+    """
+    result = ClassifyAndExtractResult(
+        is_relevant=True, company_name="Rabot Energy", job_title="Interview", status="interview"
+    )
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email()})
+
+    assert output["extracted"].job_title == UNSPECIFIED_JOB_TITLE
+
+
 def test_classify_and_extract_llm_failure_routes_to_error_without_raising():
     node = make_classify_and_extract_node(
         FakeExtractModel(FakeStructuredModel(exception=ValueError("boom"))), get_sources()

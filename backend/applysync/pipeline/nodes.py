@@ -35,9 +35,24 @@ UNSPECIFIED_JOB_TITLE = "(unspecified role)"
 # instruction alone. Checked case-insensitively.
 _PLACEHOLDER_JOB_TITLES = {"not specified", "unknown", "n/a", "none", "null", "unspecified"}
 
+# Status words the model sometimes emits as the job_title when the email states
+# no role - seen for real: an interview-appointment email ("Your Interview
+# Appointment", which never names the role) had job_title extracted as
+# "Interview", creating a junk application row titled "Interview". Treat an exact
+# status-word title as "no title" so it dedupes to the real application by
+# company instead. Exact match only, so real titles like "Interview Coordinator"
+# are untouched.
+_STATUS_WORD_TITLES = {
+    "applied", "viewed", "assessment", "interview", "interviewing",
+    "interview appointment", "rejected", "rejection", "offer", "declined", "other",
+}
+
 
 def _normalize_job_title(job_title: str | None) -> str:
-    if not job_title or job_title.strip().lower() in _PLACEHOLDER_JOB_TITLES:
+    if not job_title:
+        return UNSPECIFIED_JOB_TITLE
+    normalized = job_title.strip().lower()
+    if normalized in _PLACEHOLDER_JOB_TITLES or normalized in _STATUS_WORD_TITLES:
         return UNSPECIFIED_JOB_TITLE
     return job_title
 
