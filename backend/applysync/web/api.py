@@ -16,6 +16,17 @@ from applysync.search import SearxngClient
 router = APIRouter(prefix="/api", tags=["applications"])
 
 
+def _conflict_detail(exc: "repo.ApplicationIdentityConflict") -> str:
+    """Plain-language 409 message for an identity collision, naming the existing
+    application when we could identify it."""
+    if exc.existing_id is not None:
+        return (
+            f"This would duplicate application #{exc.existing_id}, which already has "
+            "the same company, title, platform and applied date."
+        )
+    return "This would duplicate an existing application with the same company, title, platform and applied date."
+
+
 class StatusUpdate(BaseModel):
     status: str
 
@@ -197,16 +208,22 @@ def register_api_routes(
         "/applications/{application_id}",
         response_model=Application,
         summary="Correct an application's extracted fields (company, title, platform)",
-        responses={404: {"description": "Application not found"}},
+        responses={
+            404: {"description": "Application not found"},
+            409: {"description": "The edit would duplicate an existing application"},
+        },
     )
     def patch_fields(application_id: int, body: FieldsUpdate, session: Session = Depends(get_session)):
-        application = repo.update_application_fields(
-            session,
-            application_id,
-            company_name=body.company_name,
-            job_title=body.job_title,
-            platform=body.platform,
-        )
+        try:
+            application = repo.update_application_fields(
+                session,
+                application_id,
+                company_name=body.company_name,
+                job_title=body.job_title,
+                platform=body.platform,
+            )
+        except repo.ApplicationIdentityConflict as exc:
+            raise HTTPException(status_code=409, detail=_conflict_detail(exc)) from exc
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found")
         return application
@@ -215,7 +232,10 @@ def register_api_routes(
         "/applications/{application_id}/reprocess",
         response_model=Application,
         summary="Re-run extraction on the original email behind this application",
-        responses={404: {"description": "Application not found"}},
+        responses={
+            404: {"description": "Application not found"},
+            409: {"description": "Reprocessing would duplicate an existing application"},
+        },
     )
     def post_reprocess(
         application_id: int,
@@ -223,7 +243,12 @@ def register_api_routes(
         gmail_client: GmailClient = Depends(get_gmail_client),
         model=Depends(get_llm_model),
     ):
-        application = reprocess_application(session, application_id, gmail_client=gmail_client, model=model)
+        try:
+            application = reprocess_application(
+                session, application_id, gmail_client=gmail_client, model=model
+            )
+        except repo.ApplicationIdentityConflict as exc:
+            raise HTTPException(status_code=409, detail=_conflict_detail(exc)) from exc
         if application is None:
             raise HTTPException(status_code=404, detail="Application not found")
         return application

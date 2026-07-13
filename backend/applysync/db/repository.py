@@ -4,6 +4,7 @@ import json
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
 from applysync.db.models import (
@@ -206,6 +207,18 @@ def set_manual_status(session: Session, application_id: int, status: str) -> App
     return application
 
 
+class ApplicationIdentityConflict(RuntimeError):
+    """Updating an application's identity fields would collide with the
+    UNIQUE(company_name, job_title, platform, applied_date) of a *different*
+    existing application - i.e. the edit/reprocess would make this application a
+    duplicate of one already on record. Callers surface a clear 409 instead of
+    letting the raw sqlite IntegrityError bubble up as a 500."""
+
+    def __init__(self, message: str, *, existing_id: int | None = None):
+        super().__init__(message)
+        self.existing_id = existing_id
+
+
 def update_application_fields(
     session: Session,
     application_id: int,
@@ -217,6 +230,11 @@ def update_application_fields(
     """Inline-edit correction for extracted fields the LLM got wrong. Only
     overwrites fields actually passed in, so a partial edit (e.g. just
     platform) doesn't blank out the others.
+
+    Raises ApplicationIdentityConflict if the new identity tuple collides with a
+    different existing application (e.g. reprocessing #250 re-extracts a company
+    that already has an identical row), rather than letting the UNIQUE
+    constraint raise a raw IntegrityError.
     """
     application = session.get(Application, application_id)
     if application is None:
@@ -229,7 +247,30 @@ def update_application_fields(
         application.platform = platform
     application.updated_at = _utcnow()
     session.add(application)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        # rollback reverts the in-memory edits, so application now reflects the
+        # stored values again; recompute the intended identity to name the
+        # existing row the user collided with.
+        intended_company = company_name if company_name is not None else application.company_name
+        intended_title = job_title if job_title is not None else application.job_title
+        intended_platform = platform if platform is not None else application.platform
+        existing = session.exec(
+            select(Application).where(
+                Application.company_name == intended_company,
+                Application.job_title == intended_title,
+                Application.platform == intended_platform,
+                Application.applied_date == application.applied_date,
+                Application.id != application_id,
+            )
+        ).first()
+        raise ApplicationIdentityConflict(
+            "an application with the same company, title, platform and applied "
+            "date already exists",
+            existing_id=existing.id if existing else None,
+        ) from exc
     session.refresh(application)
     return application
 
