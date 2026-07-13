@@ -138,3 +138,67 @@ def test_post_reprocess(client):
     body = response.json()
     assert body["job_title"] == "Backend Engineer"
     assert body["current_status"] == "interview"
+
+
+def test_patch_fields_conflict_returns_409(client):
+    """Editing an application's identity into one that already exists returns a
+    clean 409, not a 500 from the UNIQUE constraint."""
+    repo.create_application(
+        client.db_session, company_name="Galvany", job_title="Engineer", platform="other",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+    target = repo.create_application(
+        client.db_session, company_name="Other Co", job_title="Engineer", platform="other",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+
+    response = client.patch(
+        f"/api/applications/{target.id}",
+        json={"company_name": "Galvany", "job_title": "Engineer", "platform": "other"},
+    )
+
+    assert response.status_code == 409
+    assert "duplicate" in response.json()["detail"].lower()
+
+
+def test_post_reprocess_conflict_returns_409(client):
+    """Regression: reprocessing an application whose re-extracted company now
+    matches a different existing application returned a 500 (raw UNIQUE
+    IntegrityError). It should be a clean 409 instead."""
+    repo.create_application(
+        client.db_session, company_name="Galvany", job_title="(unspecified role)", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+    target = repo.create_application(
+        client.db_session, company_name="Galvny", job_title="(unspecified role)", platform="linkedin",
+        applied_date=date(2026, 1, 1), current_status="applied",
+    )
+    repo.add_status_event(
+        client.db_session, application_id=target.id, status="applied",
+        event_date=datetime(2026, 1, 1), source_email_id="msg-9",
+    )
+    raw_message = {
+        "id": "msg-9",
+        "threadId": "thread-9",
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "From", "value": "jobs@galvany.example"},
+                {"name": "Subject", "value": "Your application"},
+                {"name": "Date", "value": "Wed, 1 Jan 2026 09:00:00 +0000"},
+            ],
+            "body": {"data": _b64("Thanks for applying at Galvany.")},
+        },
+    }
+    # Re-extraction yields the corrected company "Galvany" (title stays
+    # unspecified), colliding with the first row's identity.
+    extracted = ClassifyAndExtractResult(
+        is_relevant=True, company_name="Galvany", job_title=None, status="applied"
+    )
+    client.app.dependency_overrides[get_gmail_client] = lambda: FakeGmailClient(raw_message)
+    client.app.dependency_overrides[get_llm_model] = lambda: FakeExtractModel(FakeStructuredModel(result=extracted))
+
+    response = client.post(f"/api/applications/{target.id}/reprocess")
+
+    assert response.status_code == 409
+    assert "duplicate" in response.json()["detail"].lower()
