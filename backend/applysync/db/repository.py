@@ -54,23 +54,28 @@ def mark_processed(
 
 
 def find_matching_application(
-    session: Session, company_name: str, job_title: str, platform: str
+    session: Session, company_name: str, job_title: str
 ) -> Application | None:
-    """Heuristic-first match: company + title + platform, normalized (case,
-    whitespace, legal suffixes) so e.g. "EGYM" and "EGYM SE" from two emails
-    for the same application still match. Remaining ambiguous cases (real
-    near-duplicates, renamed titles) are the LLM-fallback's job in the
-    match_existing_application pipeline node, not this function.
+    """Heuristic match on normalized company + title ONLY. Platform is
+    deliberately NOT part of application identity: it is a per-email attribution
+    label guessed from the sender (guess_platform), so the SAME real application
+    scatters across platform values as different senders email about it - the
+    ATS vendor vs the company's own domain. Seen for real: a Galvany application
+    whose interview updates came in as platform "other" and whose rejection came
+    via ashbyhq.com (platform "ashby") landed in two separate rows. Matching on
+    company+title collapses those onto one application; the platform column is
+    still stored and displayed, just never used to decide identity.
 
-    Normalization happens in Python, not SQL, since matching now scans
-    candidates for the platform rather than doing an exact-equality WHERE -
-    fine at this project's scale (a personal application tracker, not a
-    high-volume table).
+    Normalization (case, whitespace, legal suffixes) still applies so "EGYM" and
+    "EGYM SE" match. Remaining ambiguous cases (a missing title vs a genuinely
+    different one) are the disambiguation agent's job, not this function.
+    Ordered by id so the oldest matching row wins, deterministically. A full
+    Python scan is fine at this project's scale (a personal tracker).
     """
     target_company = _normalize_for_matching(company_name)
     target_title = _normalize_for_matching(job_title)
 
-    candidates = session.exec(select(Application).where(Application.platform == platform)).all()
+    candidates = session.exec(select(Application).order_by(Application.id)).all()
     for candidate in candidates:
         if (
             _normalize_for_matching(candidate.company_name) == target_company

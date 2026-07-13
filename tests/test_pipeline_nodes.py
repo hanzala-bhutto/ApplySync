@@ -204,7 +204,7 @@ def test_upsert_db_creates_new_application_and_marks_processed(session):
 
     node(state)
 
-    application = repo.find_matching_application(session, "Acme", "Engineer", "linkedin")
+    application = repo.find_matching_application(session, "Acme", "Engineer")
     assert application is not None
     assert application.current_status == "applied"
     assert repo.is_processed(session, "msg-1") is True
@@ -247,7 +247,7 @@ def test_upsert_db_duplicate_skip_writes_nothing_but_marks_processed(session):
 
     node(state)
 
-    assert repo.find_matching_application(session, "Acme", "Engineer", "linkedin") is None
+    assert repo.find_matching_application(session, "Acme", "Engineer") is None
     assert repo.is_processed(session, "msg-1") is True
 
 
@@ -260,4 +260,4 @@ def test_mark_skipped_marks_processed_without_writing_application(session):
     node({"email": _email()})
 
     assert repo.is_processed(session, "msg-1") is True
-    assert repo.find_matching_application(session, "Acme", "Engineer", "linkedin") is None
+    assert repo.find_matching_application(session, "Acme", "Engineer") is None

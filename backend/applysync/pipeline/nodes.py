@@ -244,13 +244,11 @@ def make_classify_and_extract_node(model, sources: SourcesConfig):
 def make_match_node(session: Session):
     def match_existing_application(state: EmailState) -> dict:
         extracted = state["extracted"]
-        platform = state.get("platform_hint") or "other"
 
         existing = repo.find_matching_application(
             session,
             company_name=extracted.company_name,
             job_title=extracted.job_title,
-            platform=platform,
         )
         if existing is None:
             return {"match": MatchDecision(action="new_application")}
