@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 from applysync.db import repository as repo
 from applysync.db.models import Application
 from applysync.gmail.models import RawEmail
+from applysync.pipeline.nodes import UNSPECIFIED_JOB_TITLE
 from applysync.pipeline.state import DisambiguationVerdict, JobApplicationEvent
 from applysync.search import SearxngError
 
@@ -16,13 +17,26 @@ logger = logging.getLogger(__name__)
 # A single ambiguous email should never fan out into an unbounded number of
 # rate-limited LLM calls (NVIDIA free tier is 40 RPM). This caps the agent's
 # tool-gathering turns; if it hasn't submitted a verdict by then it's forced
-# to decide from what it has (see run_disambiguation).
-MAX_AGENT_TURNS = 6
+# to decide from what it has (see run_disambiguation). Raised from 6 to 8
+# after a real full-history resync showed ~25% of ambiguous cases hitting the
+# old limit and failing open (safe, but an avoidable extra row) - largely
+# from the model repeating web_entity_check for the same query instead of
+# using the cheaper, more directly relevant get_status_history/
+# read_source_email first (see the system prompt's tool-ordering guidance,
+# added alongside this bump).
+MAX_AGENT_TURNS = 8
 
 # Source emails and search snippets can be long; the model only needs enough to
 # tell "same application" from "different application", not the whole payload.
 _EMAIL_TRUNCATE = 1500
 _SEARCH_SNIPPET_TRUNCATE = 300
+
+# A candidate in one of these statuses is no longer an open application, so a
+# title-less status email (see _title_less_guidance) almost certainly isn't
+# about it. Used only to narrow which candidate the title-less bias points at,
+# never to exclude a candidate from the tool-loop entirely - the agent can
+# still pick a terminal-status candidate if it finds real evidence for it.
+_TERMINAL_STATUSES = {"rejected", "declined"}
 
 
 class DisambiguationError(RuntimeError):
@@ -54,11 +68,17 @@ The NEW email being classified:
 
 Existing candidate applications at this company/platform:
 {candidates}
-
-Use the tools to inspect a candidate's status history, read the source email a \
-candidate came from (to compare against the new email above), or check the \
-company on the web if real-world identity is in doubt. When you are confident, \
-call submit_verdict exactly once with:
+{title_less_guidance}
+Start with get_status_history and/or read_source_email for the candidate(s) \
+above - they answer the actual question (is this a status update for one of \
+them?) directly and immediately satisfy the evidence requirement below. Only \
+use web_entity_check afterward, and only if the company's real-world identity \
+is itself in doubt (e.g. two similarly-named but possibly-different \
+companies) - it does not tell you whether two job postings are the same role,
+so it does not substitute for the tools above and should not be your first \
+move. You have a limited number of turns; do not call web_entity_check more \
+than once for the same query. When you are confident, call submit_verdict \
+exactly once with:
   - decision: "same_application" if the new email is a status update for one of \
 the candidates; "different_application" if it is a genuinely separate role; \
 "duplicate" if it is a redundant re-confirmation of a candidate that should NOT \
@@ -68,7 +88,64 @@ create a new row.
   - reasoning: one or two sentences on why.
 
 Prefer "different_application" only when the evidence genuinely points to a \
-separate role - a missing title alone is not proof of a different application."""
+separate role - a MISSING title alone is not proof of a different application. \
+But when a title IS present on both sides, do not wave away a real difference \
+as "slightly different wording" just because the company and rough date match \
+- company and date alone are NOT sufficient evidence that two differently- \
+worded titles are the same role. A real mistake seen before: three emails at \
+one company for "Backend Engineer - Pricing", "Software Engineer - Trading \
+Systems", and "Werkstudentin People Operations, HR" were wrongly merged into \
+one application, reasoning that the titles "differed slightly" - they name \
+three different roles/departments, not one role worded three ways. Only treat \
+differing titles as the same role when the difference is clearly cosmetic: \
+formatting, an added qualifier like "(Senior)", language, or an ATS reference \
+code/suffix. A different specialization, department, or seniority track named \
+in the title is a different role, not a wording variation.
+
+A "same_application" or "duplicate" verdict merges data into an existing row - \
+that is much harder to undo than creating an extra one, so it requires real \
+evidence, not just a plausible guess from the company/title alone. Before \
+submitting either of those two decisions, you MUST first call \
+get_status_history or read_source_email for the SPECIFIC candidate id you are \
+about to name as matched_application_id; submitting without having done so for \
+that exact id will be rejected. "different_application" has no such \
+requirement - it is always safe to submit directly."""
+
+
+def _title_less_guidance(extracted: JobApplicationEvent, candidates: list[Application]) -> str:
+    """Extra prompt guidance for the case that caused a real mismatch (a
+    title-less status email - "Your Interview Appointment" - got attached to
+    the wrong candidate, with the model hallucinating the interviewer's title
+    as the job). Narrows the bias to the most recently active candidate
+    (open applications only, ranked by updated_at) when there's exactly one,
+    and otherwise pushes the model toward NOT guessing. Returns "" when the
+    new email does name a title - i.e. this case doesn't apply.
+    """
+    if extracted.job_title != UNSPECIFIED_JOB_TITLE:
+        return ""
+
+    active = [c for c in candidates if c.current_status not in _TERMINAL_STATUSES]
+    warning = (
+        "\nIMPORTANT: this new email does not name a job title at all (a generic "
+        "status update). Do NOT invent or infer a job title from unrelated details "
+        "in the email (e.g. an interviewer's own title, a department name) - that "
+        "has caused a real wrong match before.\n"
+    )
+    if active:
+        lead = max(active, key=lambda c: c.updated_at)
+        warning += (
+            f"Weak prior, not a conclusion: of the still-open candidates, id={lead.id} "
+            f"(status={lead.current_status!r}) was updated most recently, making it the "
+            "single likeliest match. Use the tools to confirm or contradict this before "
+            "deciding - do not accept it on recency alone.\n"
+        )
+    warning += (
+        "If, after checking, you still cannot tie this email to ONE specific "
+        "candidate with concrete evidence, prefer \"different_application\": a "
+        "spurious extra row is easy to spot and merge later, but a wrong merge "
+        "silently hides a real application.\n"
+    )
+    return warning
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -109,12 +186,22 @@ def run_disambiguation(
     """
     candidate_by_id = {c.id: c for c in candidates}
 
+    # A same_application/duplicate verdict merges data into an existing row -
+    # much harder to undo than an extra row - so it must be backed by the
+    # agent actually having looked at real evidence at least once, not just a
+    # plausible-sounding guess (the documented "shaky/hallucinated reasoning"
+    # reliability gap). Tracks which candidate ids an evidence tool was
+    # actually invoked for; a bad/unknown application_id (caught below,
+    # before this is recorded) does not count as evidence gathered.
+    evidence_gathered: set[int] = set()
+
     @tool
     def get_status_history(application_id: int) -> str:
         """Return the status-change history (status, date, source) for a candidate
         application id, oldest first."""
         if application_id not in candidate_by_id:
             return f"error: {application_id} is not one of the candidate ids"
+        evidence_gathered.add(application_id)
         events = repo.application_timeline(session, application_id)
         if not events:
             return "no status events recorded"
@@ -132,6 +219,7 @@ def run_disambiguation(
         and a truncated body."""
         if application_id not in candidate_by_id:
             return f"error: {application_id} is not one of the candidate ids"
+        evidence_gathered.add(application_id)
         events = repo.application_timeline(session, application_id)
         source_id = next(
             (e.source_email_id for e in reversed(events) if e.source_email_id), None
@@ -171,6 +259,13 @@ def run_disambiguation(
         """Submit the final decision. decision is one of same_application,
         different_application, duplicate. matched_application_id is the candidate id
         for same_application/duplicate, or 0 for different_application."""
+        if decision in ("same_application", "duplicate") and matched_application_id not in evidence_gathered:
+            return (
+                "rejected: a same_application/duplicate verdict requires calling "
+                "get_status_history or read_source_email for THIS candidate id "
+                f"({matched_application_id}) first - you have not done so yet. "
+                "Gather that evidence, then resubmit."
+            )
         submitted["verdict"] = (decision, matched_application_id, reasoning)
         return "verdict recorded"
 
@@ -190,6 +285,7 @@ def run_disambiguation(
                 job_title=extracted.job_title,
                 body=_truncate(current_email.body, _EMAIL_TRUNCATE),
                 candidates=_format_candidates(candidates),
+                title_less_guidance=_title_less_guidance(extracted, candidates),
             )
         ),
         HumanMessage(content="Decide whether this email matches an existing application."),

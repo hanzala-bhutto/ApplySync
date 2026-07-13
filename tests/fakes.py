@@ -71,6 +71,7 @@ class FakeToolLoopModel:
     def __init__(self, script):
         self._script = list(script)
         self.invocations = 0
+        self.seen_messages = []
 
     def bind_tools(self, tools):
         return self
@@ -80,6 +81,7 @@ class FakeToolLoopModel:
 
     def invoke(self, messages):
         self.invocations += 1
+        self.seen_messages.append(messages)
         if not self._script:
             raise AssertionError("FakeToolLoopModel ran out of scripted responses")
         return self._script.pop(0)
