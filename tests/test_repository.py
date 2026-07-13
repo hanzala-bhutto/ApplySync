@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from applysync.db import repository as repo
 
@@ -207,6 +207,65 @@ def test_add_status_event_updates_application_current_status(session):
 
     session.refresh(application)
     assert application.current_status == "interview"
+
+
+def test_add_status_event_out_of_order_does_not_regress_current_status(session):
+    """Regression: Gmail's search API returns results newest-first, not
+    chronologically, so a full/historical sync can process an application's
+    emails in an arbitrary order within one run. current_status must reflect
+    whichever event is latest BY event_date, not whichever happened to be
+    added to the DB last - confirmed for real, a full resync left an
+    application stuck on "applied" despite a chronologically later
+    "rejected" event already on record.
+    """
+    application = repo.create_application(
+        session,
+        company_name="Acme Corp",
+        job_title="Backend Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    repo.add_status_event(
+        session, application_id=application.id, status="rejected", event_date=datetime(2026, 1, 20)
+    )
+    # An older email processed AFTER the newer one (out-of-order batch) must
+    # not overwrite the already-recorded later status.
+    repo.add_status_event(
+        session, application_id=application.id, status="applied", event_date=datetime(2026, 1, 10)
+    )
+
+    session.refresh(application)
+    assert application.current_status == "rejected"
+
+
+def test_add_status_event_handles_mixed_aware_and_naive_event_dates(session):
+    """event_date values in this codebase are a real mix of timezone-aware
+    (parsed from an email's Date header) and naive (_utcnow(), assumed UTC) -
+    the latest-event comparison must not crash or misorder across that mix.
+    """
+    application = repo.create_application(
+        session,
+        company_name="Acme Corp",
+        job_title="Backend Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    repo.add_status_event(
+        session,
+        application_id=application.id,
+        status="interview",
+        event_date=datetime(2026, 1, 10, tzinfo=timezone.utc),
+    )
+    repo.add_status_event(
+        session, application_id=application.id, status="rejected", event_date=datetime(2026, 1, 20)
+    )
+
+    session.refresh(application)
+    assert application.current_status == "rejected"
 
 
 def test_stale_applications_finds_old_untouched_applied_rows(session):

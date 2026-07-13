@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from applysync.config import get_sources
 from applysync.db import repository as repo
 from applysync.gmail.models import RawEmail
@@ -137,6 +139,56 @@ def test_classify_and_extract_placeholder_job_title_text_normalizes():
     output = node({"email": _email()})
 
     assert output["extracted"].job_title == UNSPECIFIED_JOB_TITLE
+
+
+@pytest.mark.parametrize(
+    "bad_title",
+    [
+        "Technical Interview",
+        "AI interview",
+        "AI-powered video interview",
+        "Online Assessment",
+        "Phone Screening",
+        "Interview",
+    ],
+)
+def test_classify_and_extract_process_step_job_title_normalizes(bad_title):
+    """Regression: the model sometimes extracts the TYPE of interview/process
+    step (real examples above, seen in a real full-history resync) as the
+    job_title instead of the actual role - defense-in-depth alongside the
+    STEP 3 prompt guidance telling it not to.
+    """
+    result = ClassifyAndExtractResult(
+        is_relevant=True, company_name="Acme", job_title=bad_title, status="interview"
+    )
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email()})
+
+    assert output["extracted"].job_title == UNSPECIFIED_JOB_TITLE
+
+
+@pytest.mark.parametrize(
+    "real_title",
+    [
+        "AI Integration Engineer",
+        "Backend Engineer (m/w/d) - Pricing",
+        "Senior Fullstack Applied AI Engineer",
+        "Call Center Software Engineer",
+    ],
+)
+def test_classify_and_extract_real_titles_with_process_words_not_normalized(real_title):
+    """The process-step regex must not false-positive on real titles that
+    happen to contain a qualifier/process word (e.g. "AI", "Call") alongside
+    a real role noun."""
+    result = ClassifyAndExtractResult(
+        is_relevant=True, company_name="Acme", job_title=real_title, status="applied"
+    )
+    node = make_classify_and_extract_node(FakeExtractModel(FakeStructuredModel(result=result)), get_sources())
+
+    output = node({"email": _email()})
+
+    assert output["extracted"].job_title == real_title
 
 
 def test_classify_and_extract_llm_failure_routes_to_error_without_raising():
