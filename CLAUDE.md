@@ -722,6 +722,41 @@ merged into `Application`. Locked with the user, ordered by dependency:
       project's history (EGYM dedupe, pagination cap, lookback buffer), the
       reject/ambiguous edges only surface against real data, so do a live sync
       before fully trusting the agent's judgment on real ambiguous pairs.
+- [x] **Fuzzy/alias company matching** (agreed next-build item, now shipped).
+      Closes the exact-string blind spot in `repo.find_matching_application`/
+      `find_candidate_applications` that let real typo dupes ("EGYM" vs
+      "EGYG") and word-add dupes ("Galvany" vs "Galvany Energy") slip through
+      as separate rows. `repository.py`: `_company_names_match(a, b)` is
+      `fuzz.ratio(a, b) >= 75` (new `rapidfuzz` dependency; the typo path -
+      chosen because a 1-char edit on a short name like "egym"/"egyg" only
+      scores ~75 on any string metric, a higher bar would miss the real case)
+      **OR** a strict token-subset check (`_is_company_token_subset`, the
+      word-add path: every word of the shorter normalized name must appear in
+      the longer one). Title must still match exactly regardless of company
+      score, so two different roles at the same company still correctly stay
+      distinct. `find_exact_company_applications` (renamed from the old
+      `find_candidate_applications`) stays EXACT-company-only and backs
+      `find_matching_application`, so a fuzzy-only company hit - even with an
+      exact title match - can never auto-resolve to `update_existing`; it
+      always falls through to `find_candidate_applications` (now fuzzy) and
+      routes to the disambiguation agent via the existing ambiguous-match
+      conditional edge in `pipeline/graph.py` (no graph/node changes needed,
+      since candidate_ids being non-empty already triggers that route).
+      **Real false positive found by running the extended cleanup script
+      against the live database** (not caught by unit tests): an earlier
+      version scored company similarity with `max(fuzz.ratio,
+      fuzz.token_set_ratio)`, and `token_set_ratio` alone matched "Cloud&Heat
+      Technologies GmbH" and "Nash Technologies" at 82.8 purely because they
+      share the generic word "technologies" - completely different companies.
+      Fixed by replacing the token_set_ratio path with the stricter subset
+      check above, which requires every word of the shorter name to appear in
+      the longer one, not just partial overlap. `backend/scripts/
+      merge_duplicate_applications.py` extended with a second pass
+      (`find_fuzzy_duplicate_groups`, exact-title bucket + union-find over
+      fuzzy-matching companies within it) so existing typo/alias dupes can be
+      found and merged the same dry-run/`--apply` way as the original
+      exact-identity pass. Feasibility report:
+      `docs/feasibility/fuzzy-company-matching.md`.
 - [ ] **Company-alias canonicalization.** Resolve a company's official name +
       known aliases via search, store a mapping (new `canonical_name`/alias
       table + `repo` apply helpers). Apply at match time and as a one-off batch
