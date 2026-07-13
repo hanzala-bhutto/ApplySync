@@ -212,7 +212,15 @@ def run_disambiguation(
             if fn is None:
                 output = f"error: unknown tool {call['name']}"
             else:
-                output = fn.invoke(call["args"])
+                try:
+                    output = fn.invoke(call["args"])
+                except Exception as exc:  # noqa: BLE001 - bad/mistyped args from the model
+                    # This model is unreliable with tool args (seen for real: it
+                    # passed a Gmail message-id string as an int application_id).
+                    # Return the error to the model so it can correct on the next
+                    # turn, instead of letting one bad call crash the whole agent
+                    # and fail open to a duplicate application.
+                    output = f"error calling {call['name']}: {exc}"
             messages.append(ToolMessage(content=str(output), tool_call_id=call["id"]))
 
         if "verdict" in submitted:
