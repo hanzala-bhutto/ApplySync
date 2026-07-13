@@ -189,6 +189,29 @@ def test_match_existing_application_updates_when_match_found(session):
     assert result["match"].application_id == application.id
 
 
+def test_match_existing_application_ambiguous_when_company_is_fuzzy_only(session):
+    """A fuzzy-only company hit (typo) must NOT auto-resolve to
+    update_existing even though the title matches exactly - it has to route
+    to the disambiguation agent instead (see make_match_node's routing in
+    graph.py), since the company itself isn't confirmed to be the same one.
+    """
+    application = repo.create_application(
+        session,
+        company_name="EGYM",
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+    node = make_match_node(session)
+    extracted = JobApplicationEvent(company_name="EGYG", job_title="Engineer", status="interview")
+
+    result = node({"extracted": extracted, "platform_hint": "linkedin"})
+
+    assert result["match"] is None
+    assert result["candidate_ids"] == [application.id]
+
+
 # --- upsert_db ---
 
 

@@ -54,6 +54,60 @@ def find_duplicate_groups(session: Session) -> list[list[Application]]:
     return [g for g in groups.values() if len(g) > 1]
 
 
+def find_fuzzy_duplicate_groups(session: Session) -> list[list[Application]]:
+    """Groups applications whose title matches exactly but whose company is
+    only a FUZZY match - a typo ("EGYM"/"EGYG") or a word added/removed
+    ("Galvany"/"Galvany Energy") - the class of dupe the pipeline's
+    disambiguation agent now guards against going forward (see
+    repository.find_candidate_applications). This is the one-off pass for
+    rows already in the database from before that check existed.
+
+    Buckets by exact normalized title first (fuzzy comparison is company-only,
+    per repository._company_names_match), then unions companies within each
+    bucket whose fuzzy score clears the threshold. A union-find is used
+    because fuzzy similarity isn't transitive, but a chain of pairwise hits
+    (A~B, B~C) still represents one real company worth one merge decision.
+    Pairs that are already an EXACT company match are skipped here - those are
+    find_duplicate_groups' job, not this fuzzy pass'.
+    """
+    by_title: dict[str, list[Application]] = defaultdict(list)
+    for app in session.exec(select(Application).order_by(Application.id)).all():
+        by_title[repo._normalize_for_matching(app.job_title)].append(app)
+
+    groups: list[list[Application]] = []
+    for apps in by_title.values():
+        if len(apps) < 2:
+            continue
+
+        parent = list(range(len(apps)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i: int, j: int) -> None:
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
+
+        names = [repo._normalize_for_matching(a.company_name) for a in apps]
+        for i in range(len(apps)):
+            for j in range(i + 1, len(apps)):
+                if names[i] == names[j]:
+                    continue
+                if repo._company_names_match(names[i], names[j]):
+                    union(i, j)
+
+        clusters: dict[int, list[Application]] = defaultdict(list)
+        for idx, app in enumerate(apps):
+            clusters[find(idx)].append(app)
+        groups.extend(cluster for cluster in clusters.values() if len(cluster) > 1)
+
+    return groups
+
+
 def merge_group(session: Session, group: list[Application], *, apply: bool) -> dict:
     group = sorted(group, key=lambda a: a.id)
     canonical = group[0]
@@ -115,22 +169,26 @@ def main() -> None:
     print(f"DB: {db_path}   mode: {'APPLY' if args.apply else 'DRY-RUN'}")
 
     with Session(get_engine(db_path)) as session:
-        groups = find_duplicate_groups(session)
-        if not groups:
-            print("No same-identity duplicate groups found. Nothing to merge.")
+        exact_groups = find_duplicate_groups(session)
+        fuzzy_groups = find_fuzzy_duplicate_groups(session)
+        if not exact_groups and not fuzzy_groups:
+            print("No duplicate groups found. Nothing to merge.")
             return
+
         total_removed = 0
-        for group in sorted(groups, key=lambda g: min(a.id for a in g)):
-            plan = merge_group(session, group, apply=args.apply)
-            total_removed += len(plan["merged_ids"])
-            print("-" * 70)
-            print(f"  keep #{plan['canonical_id']}  {plan['canonical_name']!r} / {plan['canonical_title']!r}")
-            print(f"  merge ids {plan['merged_ids']}  (platforms: {plan['merged_platforms']})")
-            print(f"  names seen: {plan['merged_names']}")
-            print(f"  -> status={plan['final_status']} applied={plan['final_applied_date']} events={plan['event_count']}")
+        for label, groups in (("exact", exact_groups), ("fuzzy company", fuzzy_groups)):
+            for group in sorted(groups, key=lambda g: min(a.id for a in g)):
+                plan = merge_group(session, group, apply=args.apply)
+                total_removed += len(plan["merged_ids"])
+                print("-" * 70)
+                print(f"  [{label}] keep #{plan['canonical_id']}  {plan['canonical_name']!r} / {plan['canonical_title']!r}")
+                print(f"  merge ids {plan['merged_ids']}  (platforms: {plan['merged_platforms']})")
+                print(f"  names seen: {plan['merged_names']}")
+                print(f"  -> status={plan['final_status']} applied={plan['final_applied_date']} events={plan['event_count']}")
         print("=" * 70)
         verb = "removed" if args.apply else "would remove"
-        print(f"{len(groups)} group(s); {verb} {total_removed} duplicate row(s).")
+        total_groups = len(exact_groups) + len(fuzzy_groups)
+        print(f"{total_groups} group(s); {verb} {total_removed} duplicate row(s).")
         if not args.apply:
             print("Re-run with --apply to perform the merge.")
 

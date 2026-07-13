@@ -97,6 +97,96 @@ def test_find_matching_application_normalizes_case_and_whitespace(session):
     assert found.id == created.id
 
 
+def test_find_matching_application_does_not_fuzzy_match_company(session):
+    """find_matching_application must stay EXACT-company: a fuzzy company hit
+    (even with an exact title match) always has to go through the
+    disambiguation agent instead of auto-resolving here (see
+    make_match_node's routing).
+    """
+    repo.create_application(
+        session,
+        company_name="EGYM",
+        job_title="Backend Engineer",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    found = repo.find_matching_application(
+        session, company_name="EGYG", job_title="Backend Engineer"
+    )
+
+    assert found is None
+
+
+def test_find_candidate_applications_includes_typo_company(session):
+    created = repo.create_application(
+        session,
+        company_name="EGYM",
+        job_title="Backend Engineer",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    candidates = repo.find_candidate_applications(session, company_name="EGYG")
+
+    assert [c.id for c in candidates] == [created.id]
+
+
+def test_find_candidate_applications_includes_word_added_company(session):
+    created = repo.create_application(
+        session,
+        company_name="Galvany",
+        job_title="Backend Engineer",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    candidates = repo.find_candidate_applications(session, company_name="Galvany Energy")
+
+    assert [c.id for c in candidates] == [created.id]
+
+
+def test_find_candidate_applications_excludes_shared_generic_word(session):
+    """Regression test for a real false positive found by running the fuzzy
+    cleanup script against the live database: "Cloud&Heat Technologies GmbH"
+    and "Nash Technologies" are unrelated companies that only share the
+    generic word "technologies", but fuzz.token_set_ratio alone scored them
+    82.8 (above the old threshold) on that overlap. A strict token-subset
+    check (see _is_company_token_subset) correctly rejects this pair since
+    "cloudheat"/"nash" aren't shared.
+    """
+    repo.create_application(
+        session,
+        company_name="Cloud&Heat Technologies GmbH",
+        job_title="(unspecified role)",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    candidates = repo.find_candidate_applications(session, company_name="Nash Technologies")
+
+    assert candidates == []
+
+
+def test_find_candidate_applications_excludes_unrelated_company(session):
+    repo.create_application(
+        session,
+        company_name="Google",
+        job_title="Backend Engineer",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    candidates = repo.find_candidate_applications(session, company_name="Alphabet")
+
+    assert candidates == []
+
+
 def test_add_status_event_updates_application_current_status(session):
     application = repo.create_application(
         session,
