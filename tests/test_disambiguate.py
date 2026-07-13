@@ -177,6 +177,38 @@ def test_agent_can_call_a_tool_before_submitting(session):
     assert verdict.decision == "same_application"
 
 
+def test_agent_recovers_from_bad_tool_args_instead_of_crashing(session):
+    """Regression: this model passed a Gmail message-id STRING as the int
+    application_id to read_source_email, and the unguarded tool call crashed the
+    whole agent, failing open to a duplicate. A bad arg must now come back to
+    the model as an error so it can correct and still submit a verdict.
+    """
+    app = _seed_application(session)
+    model = FakeToolLoopModel(
+        [
+            FakeAIResponse(
+                tool_calls=[
+                    {"name": "read_source_email", "args": {"application_id": "9543a4a3f5-not-an-int"}, "id": "t1"}
+                ]
+            ),
+            _verdict_call("same_application", app.id),
+        ]
+    )
+
+    verdict = run_disambiguation(
+        _current_email(),
+        _extracted(),
+        [app],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    assert model.invocations == 2  # errored call, then a successful verdict
+    assert verdict.decision == "same_application"
+
+
 def test_agent_hallucinated_id_raises(session):
     app = _seed_application(session)
     model = FakeToolLoopModel([_verdict_call("same_application", 999)])
