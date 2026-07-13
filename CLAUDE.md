@@ -738,10 +738,20 @@ the user, ordered by dependency:
       server is open.
 - [ ] M5: LangSmith/Langfuse tracing + eval set (phase 2)
 
+## Feature workflow
+
+Before implementing any feature, write its feasibility report first
+(`docs/feasibility/<slug>.md`, via `/feasibility`) - a short
+Motivation/Problem/Solution/Changes/Benefits note on why the feature earns its
+place. Keep it short (one line per heading); it captures the *why*, not the
+design (which lives in the plan file and PR).
+
 ## Project skills
 
 Invoke these instead of re-deriving the same context from scratch:
 
+- `/feasibility`: write the short per-feature feasibility report
+  (Motivation/Problem/Solution/Changes/Benefits) into `docs/feasibility/`.
 - `/docs`: regenerate project documentation (Motivation, Features,
   Architecture, Data Flow, Setup, Roadmap) from current code state.
 - `/concepts`: explain a LangChain/LangGraph/LangSmith/Langfuse concept as
