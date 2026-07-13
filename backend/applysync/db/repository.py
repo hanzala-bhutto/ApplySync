@@ -55,38 +55,46 @@ def mark_processed(
 
 
 def find_candidate_applications(
-    session: Session, *, company_name: str, platform: str
+    session: Session, *, company_name: str
 ) -> list[Application]:
-    """Every application for the same company + platform (normalized: case,
-    whitespace, legal suffixes), regardless of job_title. This is the candidate
+    """Every application for the same company (normalized: case, whitespace,
+    legal suffixes), regardless of job_title OR platform. This is the candidate
     set the disambiguation agent reasons over when the exact-title match in
     find_matching_application misses but the company clearly already exists on
-    record - the documented missing-title-vs-different-title gap. Kept separate
-    so find_matching_application stays the fast exact-title path.
+    record - the documented missing-title-vs-different-title gap. Platform is
+    deliberately NOT a filter (see find_matching_application): it is a per-email
+    attribution label, not identity, so candidates must span platforms.
 
-    Normalization happens in Python, not SQL, since matching scans candidates
-    for the platform rather than doing an exact-equality WHERE - fine at this
-    project's scale (a personal application tracker, not a high-volume table).
+    Normalization happens in Python, not SQL - fine at this project's scale (a
+    personal application tracker, not a high-volume table). Ordered by id so the
+    oldest row is considered first, deterministically.
     """
     target_company = _normalize_for_matching(company_name)
-    candidates = session.exec(select(Application).where(Application.platform == platform)).all()
+    candidates = session.exec(select(Application).order_by(Application.id)).all()
     return [c for c in candidates if _normalize_for_matching(c.company_name) == target_company]
 
 
 def find_matching_application(
-    session: Session, company_name: str, job_title: str, platform: str
+    session: Session, company_name: str, job_title: str
 ) -> Application | None:
-    """Heuristic-first match: company + title + platform, normalized (case,
-    whitespace, legal suffixes) so e.g. "EGYM" and "EGYM SE" from two emails
-    for the same application still match. Remaining ambiguous cases (real
-    near-duplicates, renamed titles) are the LLM-fallback's job in the
-    match_existing_application pipeline node (see find_candidate_applications),
-    not this function.
+    """Heuristic match on normalized company + title ONLY. Platform is
+    deliberately NOT part of application identity: it is a per-email attribution
+    label guessed from the sender (guess_platform), so the SAME real application
+    scatters across platform values as different senders email about it - the
+    ATS vendor vs the company's own domain. Seen for real: a Galvany application
+    whose interview updates came in as platform "other" and whose rejection came
+    via ashbyhq.com (platform "ashby") landed in two separate rows. Matching on
+    company+title collapses those onto one application; the platform column is
+    still stored and displayed, just never used to decide identity.
+
+    Normalization (case, whitespace, legal suffixes) still applies so "EGYM" and
+    "EGYM SE" match. Remaining ambiguous cases (a missing title vs a genuinely
+    different one) are the disambiguation agent's job (see
+    find_candidate_applications), not this function. The oldest matching row
+    wins, deterministically.
     """
     target_title = _normalize_for_matching(job_title)
-    for candidate in find_candidate_applications(
-        session, company_name=company_name, platform=platform
-    ):
+    for candidate in find_candidate_applications(session, company_name=company_name):
         if _normalize_for_matching(candidate.job_title) == target_title:
             return candidate
     return None

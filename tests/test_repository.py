@@ -20,7 +20,7 @@ def test_create_application_and_find_matching(session):
     )
 
     found = repo.find_matching_application(
-        session, company_name="Acme Corp", job_title="Backend Engineer", platform="linkedin"
+        session, company_name="Acme Corp", job_title="Backend Engineer"
     )
 
     assert found is not None
@@ -29,9 +29,32 @@ def test_create_application_and_find_matching(session):
 
 def test_find_matching_application_returns_none_when_no_match(session):
     found = repo.find_matching_application(
-        session, company_name="Nope Inc", job_title="Nothing", platform="linkedin"
+        session, company_name="Nope Inc", job_title="Nothing"
     )
     assert found is None
+
+
+def test_find_matching_application_matches_across_different_platforms(session):
+    """Platform is a per-email attribution label, not identity. The same
+    application's confirmation and rejection can arrive via different senders
+    (its own domain vs an ATS like Ashby) and get different platform values;
+    matching must still collapse them onto one application, not fragment it.
+    """
+    created = repo.create_application(
+        session,
+        company_name="Galvany Energy",
+        job_title="Backend Engineer",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    found = repo.find_matching_application(
+        session, company_name="Galvany Energy", job_title="Backend Engineer"
+    )
+
+    assert found is not None
+    assert found.id == created.id
 
 
 def test_find_matching_application_ignores_legal_suffix_differences(session):
@@ -49,7 +72,7 @@ def test_find_matching_application_ignores_legal_suffix_differences(session):
     )
 
     found = repo.find_matching_application(
-        session, company_name="EGYM SE", job_title="(unspecified role)", platform="other"
+        session, company_name="EGYM SE", job_title="(unspecified role)"
     )
 
     assert found is not None
@@ -67,7 +90,7 @@ def test_find_matching_application_normalizes_case_and_whitespace(session):
     )
 
     found = repo.find_matching_application(
-        session, company_name="  acme corp  ", job_title="backend engineer", platform="linkedin"
+        session, company_name="  acme corp  ", job_title="backend engineer"
     )
 
     assert found is not None
@@ -485,7 +508,7 @@ def test_approve_new_application_suggestion_creates_application(session):
 
     assert approved.status == "approved"
     assert approved.reviewed_at is not None
-    application = repo.find_matching_application(session, "Acme", "Engineer", "linkedin")
+    application = repo.find_matching_application(session, "Acme", "Engineer")
     assert application is not None
     assert application.current_status == "applied"
 

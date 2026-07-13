@@ -244,30 +244,29 @@ def make_classify_and_extract_node(model, sources: SourcesConfig):
 def make_match_node(session: Session):
     def match_existing_application(state: EmailState) -> dict:
         extracted = state["extracted"]
-        platform = state.get("platform_hint") or "other"
 
         existing = repo.find_matching_application(
             session,
             company_name=extracted.company_name,
             job_title=extracted.job_title,
-            platform=platform,
         )
         if existing is not None:
-            # Exact (normalized) company+title+platform hit: the clear
-            # update case, no agent needed.
+            # Exact (normalized) company+title hit: the clear update case, no
+            # agent needed. Platform is not part of identity (see
+            # repo.find_matching_application).
             return {"match": MatchDecision(action="update_existing", application_id=existing.id)}
 
         candidates = repo.find_candidate_applications(
-            session, company_name=extracted.company_name, platform=platform
+            session, company_name=extracted.company_name
         )
         if not candidates:
-            # No prior application for this company+platform at all: clearly new.
+            # No prior application for this company at all: clearly new.
             return {"match": MatchDecision(action="new_application")}
 
-        # Ambiguous: the company+platform already exists but no title matched
-        # exactly (the documented missing-title-vs-different-title gap). Leave
-        # `match` unset and surface the candidate ids so the graph routes to
-        # the disambiguation agent instead of blindly creating a new row.
+        # Ambiguous: the company already exists but no title matched exactly
+        # (the documented missing-title-vs-different-title gap). Leave `match`
+        # unset and surface the candidate ids so the graph routes to the
+        # disambiguation agent instead of blindly creating a new row.
         return {"candidate_ids": [c.id for c in candidates], "match": None}
 
     return match_existing_application

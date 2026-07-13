@@ -3,7 +3,7 @@ from sqlmodel import select
 
 from applysync.config import get_sources
 from applysync.db import repository as repo
-from applysync.db.models import PipelineRun, ProcessedEmail, StatusEvent
+from applysync.db.models import Application, PipelineRun, ProcessedEmail, StatusEvent
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.graph import process_emails
 from applysync.pipeline.state import ClassifyAndExtractResult
@@ -63,7 +63,7 @@ def test_relevant_email_creates_application_end_to_end(session):
     assert stats["emails_relevant"] == 1
     assert stats["applications_created"] == 1
     assert stats["events_created"] == 1
-    assert repo.find_matching_application(session, "Acme", "Engineer", "linkedin") is not None
+    assert repo.find_matching_application(session, "Acme", "Engineer") is not None
 
 
 def test_irrelevant_email_is_marked_processed_without_creating_application(session):
@@ -98,7 +98,7 @@ def test_second_run_over_same_batch_processes_zero_new_emails(session):
     assert second["emails_fetched"] == 0
     assert second["applications_created"] == 0
 
-    application = repo.find_matching_application(session, "Acme", "Engineer", "linkedin")
+    application = repo.find_matching_application(session, "Acme", "Engineer")
     events = [e for e in session.exec(select(StatusEvent)).all() if e.application_id == application.id]
     assert len(events) == 1
 
@@ -127,7 +127,7 @@ def test_status_update_email_links_to_existing_application_not_a_duplicate(sessi
     assert stats["applications_created"] == 0
     assert stats["events_created"] == 1
 
-    application = repo.find_matching_application(session, "Acme", "Engineer", "linkedin")
+    application = repo.find_matching_application(session, "Acme", "Engineer")
     assert application.current_status == "interview"
 
 
@@ -202,6 +202,45 @@ def test_scrutiny_rejected_email_never_reaches_classify_and_extract(session):
     assert stats["applications_created"] == 0
     processed = session.exec(select(ProcessedEmail).where(ProcessedEmail.message_id == "msg-1")).one()
     assert processed.classification == "scrutiny_rejected"
+
+
+def test_same_application_across_different_platforms_updates_not_duplicates(session):
+    """Platform is attribution, not identity: a confirmation via one sender and
+    a later status update via a different sender (a different guessed platform)
+    for the same company+title must update the one application, not fork a new
+    row. Regression for the real Galvany fragmentation - interviews tracked as
+    platform "other", the rejection arriving via ashbyhq.com as platform
+    "ashby", landing in separate rows so the watched card never flipped.
+    """
+    model_applied = _model(
+        is_relevant=True, company_name="Galvany Energy", job_title="Backend Engineer", status="applied"
+    )
+    _process_emails(
+        [_email(message_id="msg-1", sender="jobs@galvany.example", subject="Your application for Backend Engineer")],
+        model=model_applied,
+        session=session,
+        sources=get_sources(),
+        run_id="run-1",
+        checkpointer=MemorySaver(),
+    )
+
+    model_rejected = _model(
+        is_relevant=True, company_name="Galvany Energy", job_title="Backend Engineer", status="rejected"
+    )
+    stats = _process_emails(
+        [_email(message_id="msg-2", sender="no-reply@ashbyhq.com", subject="Update on your application")],
+        model=model_rejected,
+        session=session,
+        sources=get_sources(),
+        run_id="run-2",
+        checkpointer=MemorySaver(),
+    )
+
+    assert stats["applications_created"] == 0
+    assert stats["events_created"] == 1
+    galvany = [a for a in session.exec(select(Application)).all() if "galvany" in a.company_name.lower()]
+    assert len(galvany) == 1
+    assert galvany[0].current_status == "rejected"
 
 
 def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_application(session):

@@ -139,7 +139,7 @@ def process_full_scan(
                 suggestions_created += 1
         elif not already_pending and new_extracted is not None:
             match = repo.find_matching_application(
-                session, new_extracted.company_name, new_extracted.job_title, platform_hint or "other"
+                session, new_extracted.company_name, new_extracted.job_title
             )
             repo.create_review_suggestion(
                 session,

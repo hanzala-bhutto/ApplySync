@@ -54,7 +54,7 @@ def test_approve_review_suggestion_applies_change(client):
 
     assert response.status_code == 200
     assert response.json()["status"] == "approved"
-    application = repo.find_matching_application(client.db_session, "Acme", "Engineer", "linkedin")
+    application = repo.find_matching_application(client.db_session, "Acme", "Engineer")
     assert application is not None
 
 

@@ -221,7 +221,7 @@ def test_ambiguous_email_different_application_creates_new_row(session):
 
     # Two distinct applications now exist for Nagarro on this platform.
     assert stats["applications_created"] == 1
-    all_nagarro = repo.find_candidate_applications(session, company_name="Nagarro", platform="linkedin")
+    all_nagarro = repo.find_candidate_applications(session, company_name="Nagarro")
     assert len(all_nagarro) == 2
 
 
@@ -260,7 +260,7 @@ def test_ambiguous_email_fails_open_to_new_application_on_agent_crash(session):
     stats = _run_ambiguous(session, model)
 
     assert stats["applications_created"] == 1
-    assert len(repo.find_candidate_applications(session, company_name="Nagarro", platform="linkedin")) == 2
+    assert len(repo.find_candidate_applications(session, company_name="Nagarro")) == 2
 
 
 def test_clear_update_never_invokes_the_agent(session):
