@@ -48,6 +48,13 @@ class PlatformSource(BaseModel):
 
 class SourcesConfig(BaseModel):
     confirmation_keywords: list[str]
+    # Specific multi-word phrases searched across the WHOLE email (not
+    # subject-restricted like confirmation_keywords), to catch interview
+    # invitations whose subjects carry no application keyword ("Meeting invite",
+    # "Invitation to a first conversation"). Kept specific so the broader
+    # full-text search doesn't flood; scrutinize_relevance filters the rest.
+    # Defaulted so existing configs/tests without the key still load.
+    invitation_phrases: list[str] = []
     platforms: list[PlatformSource]
 
 

@@ -32,6 +32,25 @@ def test_build_search_query_includes_broadened_single_word_keywords():
     assert "subject:interview" in query
 
 
+def test_build_search_query_includes_invitation_phrases_as_full_text():
+    """invitation_phrases must be searched across the whole email (no subject:
+    prefix), since interview invites carry no application keyword in the
+    subject - that's the whole point of them."""
+    query = build_search_query(get_sources())
+    assert '"invitation to a first conversation"' in query
+    # full-text, NOT subject-scoped
+    assert 'subject:"invitation to a first conversation"' not in query
+
+
+def test_build_search_query_handles_config_without_invitation_phrases():
+    """The field defaults to empty, so an older sources config still builds."""
+    from applysync.config import SourcesConfig
+
+    sources = SourcesConfig(confirmation_keywords=["applied"], platforms=[])
+    query = build_search_query(sources)
+    assert query == "(subject:applied)"
+
+
 def test_guess_platform_matches_known_domain():
     assert guess_platform("jobs-noreply@linkedin.com", get_sources()) == "linkedin"
 

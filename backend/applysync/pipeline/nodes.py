@@ -75,7 +75,11 @@ no concrete next stage stated - do not infer a positive or negative outcome from
 - applied: received/sent/submitted, no further update yet (the default)
 - viewed: explicitly says a recruiter opened/viewed it, nothing more
 - assessment: invites an online test/quiz (not the same as an interview)
-- interview: explicitly schedules/invites a live interview/call with a person
+- interview: invites you to a live interview, call, screening, or introductory
+  conversation/meeting with a person to discuss the role - a first-round "let's
+  have a conversation" / "invite you to a first call" / "meeting to discuss"
+  counts as interview, NOT applied. An email offering a booking link to schedule
+  such a conversation counts too.
 - rejected: explicitly states you were not selected
 - offer: explicitly states you were offered the position
 - other: relevant but doesn't fit above, or you're not confident which stage

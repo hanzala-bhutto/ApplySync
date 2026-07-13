@@ -34,6 +34,26 @@ confirmation_keywords:
   - declined
   - absage
 
+# Specific multi-word phrases searched across the WHOLE email (subject + body),
+# not subject-only like confirmation_keywords above. Interview invitations are
+# phrased "Meeting invite" / "Invitation to a first conversation" / are calendar
+# invites, so their SUBJECTS carry no application keyword and were never fetched.
+# These are the strongest interview-invite phrases; kept specific (multi-word) so
+# a full-text search stays low-noise, with scrutinize_relevance filtering the
+# rest. Recruiter cold-outreach that never names an employer is intentionally
+# not targeted here (nothing to track without a company).
+invitation_phrases:
+  - "invite you to an interview"
+  - "invitation to an interview"
+  - "invite you to a first"
+  - "invitation to a first conversation"
+  - "would like to invite you"
+  - "like to invite you to a"
+  - "schedule an interview"
+  - "einladung zum interview"
+  - "einladung zum gespräch"
+  - "möchten wir sie einladen"
+
 # Known senders, used only for best-effort platform attribution (labeling
 # in the dashboard) once a message is already confirmed relevant by
 # classify_relevant. Never used to filter the Gmail query itself. Add a
