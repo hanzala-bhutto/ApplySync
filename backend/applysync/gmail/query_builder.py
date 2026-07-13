@@ -17,8 +17,16 @@ def build_search_query(sources: SourcesConfig, after: date | None = None) -> str
     phrase to confirmation_keywords in sources.yaml, not a new domain here.
     """
     keywords = sorted(set(sources.confirmation_keywords))
-    keyword_clause = " OR ".join(_quote_if_needed(kw) for kw in keywords)
+    clauses = [_quote_if_needed(kw) for kw in keywords]
 
+    # invitation_phrases are searched across the whole email (no subject:
+    # prefix), since interview invites carry no application keyword in the
+    # subject. They are specific multi-word phrases, so full-text search stays
+    # low-noise; scrutinize_relevance filters whatever slips through.
+    for phrase in sorted(set(sources.invitation_phrases)):
+        clauses.append(f'"{phrase}"')
+
+    keyword_clause = " OR ".join(clauses)
     query = f"({keyword_clause})"
     if after is not None:
         query += f" after:{after.strftime('%Y/%m/%d')}"
