@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 from applysync.db import repository as repo
 from applysync.db.models import Application
 from applysync.gmail.models import RawEmail
+from applysync.pipeline.nodes import UNSPECIFIED_JOB_TITLE
 from applysync.pipeline.state import DisambiguationVerdict, JobApplicationEvent
 from applysync.search import SearxngError
 
@@ -23,6 +24,13 @@ MAX_AGENT_TURNS = 6
 # tell "same application" from "different application", not the whole payload.
 _EMAIL_TRUNCATE = 1500
 _SEARCH_SNIPPET_TRUNCATE = 300
+
+# A candidate in one of these statuses is no longer an open application, so a
+# title-less status email (see _title_less_guidance) almost certainly isn't
+# about it. Used only to narrow which candidate the title-less bias points at,
+# never to exclude a candidate from the tool-loop entirely - the agent can
+# still pick a terminal-status candidate if it finds real evidence for it.
+_TERMINAL_STATUSES = {"rejected", "declined"}
 
 
 class DisambiguationError(RuntimeError):
@@ -54,7 +62,7 @@ The NEW email being classified:
 
 Existing candidate applications at this company/platform:
 {candidates}
-
+{title_less_guidance}
 Use the tools to inspect a candidate's status history, read the source email a \
 candidate came from (to compare against the new email above), or check the \
 company on the web if real-world identity is in doubt. When you are confident, \
@@ -69,6 +77,42 @@ create a new row.
 
 Prefer "different_application" only when the evidence genuinely points to a \
 separate role - a missing title alone is not proof of a different application."""
+
+
+def _title_less_guidance(extracted: JobApplicationEvent, candidates: list[Application]) -> str:
+    """Extra prompt guidance for the case that caused a real mismatch (a
+    title-less status email - "Your Interview Appointment" - got attached to
+    the wrong candidate, with the model hallucinating the interviewer's title
+    as the job). Narrows the bias to the most recently active candidate
+    (open applications only, ranked by updated_at) when there's exactly one,
+    and otherwise pushes the model toward NOT guessing. Returns "" when the
+    new email does name a title - i.e. this case doesn't apply.
+    """
+    if extracted.job_title != UNSPECIFIED_JOB_TITLE:
+        return ""
+
+    active = [c for c in candidates if c.current_status not in _TERMINAL_STATUSES]
+    warning = (
+        "\nIMPORTANT: this new email does not name a job title at all (a generic "
+        "status update). Do NOT invent or infer a job title from unrelated details "
+        "in the email (e.g. an interviewer's own title, a department name) - that "
+        "has caused a real wrong match before.\n"
+    )
+    if active:
+        lead = max(active, key=lambda c: c.updated_at)
+        warning += (
+            f"Weak prior, not a conclusion: of the still-open candidates, id={lead.id} "
+            f"(status={lead.current_status!r}) was updated most recently, making it the "
+            "single likeliest match. Use the tools to confirm or contradict this before "
+            "deciding - do not accept it on recency alone.\n"
+        )
+    warning += (
+        "If, after checking, you still cannot tie this email to ONE specific "
+        "candidate with concrete evidence, prefer \"different_application\": a "
+        "spurious extra row is easy to spot and merge later, but a wrong merge "
+        "silently hides a real application.\n"
+    )
+    return warning
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -190,6 +234,7 @@ def run_disambiguation(
                 job_title=extracted.job_title,
                 body=_truncate(current_email.body, _EMAIL_TRUNCATE),
                 candidates=_format_candidates(candidates),
+                title_less_guidance=_title_less_guidance(extracted, candidates),
             )
         ),
         HumanMessage(content="Decide whether this email matches an existing application."),

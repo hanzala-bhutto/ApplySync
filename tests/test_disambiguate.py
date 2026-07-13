@@ -17,6 +17,7 @@ from applysync.db import repository as repo
 from applysync.db.models import StatusEvent
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.graph import process_emails
+from applysync.pipeline.nodes import UNSPECIFIED_JOB_TITLE
 from applysync.pipeline.state import ClassifyAndExtractResult, JobApplicationEvent
 from applysync.research.disambiguate import (
     MAX_AGENT_TURNS,
@@ -207,6 +208,76 @@ def test_agent_recovers_from_bad_tool_args_instead_of_crashing(session):
 
     assert model.invocations == 2  # errored call, then a successful verdict
     assert verdict.decision == "same_application"
+
+
+def test_title_less_email_prompt_biases_toward_most_recent_active_candidate(session):
+    """Regression test for a real bug: a title-less status email ("Your
+    Interview Appointment") got attached to the wrong candidate, with the
+    model hallucinating the interviewer's title as the job. The prompt sent
+    to the agent must call out the single most-recently-updated open
+    candidate as a weak prior when the new email names no title at all.
+    """
+    stale = _seed_application(session, title="Backend Engineer", status="rejected")
+    active = _seed_application(session, title="Frontend Engineer", status="interview")
+    model = FakeToolLoopModel([_verdict_call("same_application", active.id)])
+
+    run_disambiguation(
+        _current_email(),
+        _extracted(job_title=UNSPECIFIED_JOB_TITLE),
+        [stale, active],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "does not name a job title" in system_prompt
+    assert "likeliest match" in system_prompt
+    assert f"id={active.id} " in system_prompt
+    assert "was updated most recently" in system_prompt
+
+
+def test_title_less_email_prompt_has_no_single_lead_when_no_active_candidate(session):
+    """All candidates rejected/declined: there's no obvious lead, so the
+    prompt should push toward different_application rather than naming any
+    one candidate as the likely match.
+    """
+    stale = _seed_application(session, title="Backend Engineer", status="rejected")
+    model = FakeToolLoopModel([_verdict_call("different_application", 0)])
+
+    run_disambiguation(
+        _current_email(),
+        _extracted(job_title=UNSPECIFIED_JOB_TITLE),
+        [stale],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "does not name a job title" in system_prompt
+    assert "likeliest match" not in system_prompt
+    assert "prefer \"different_application\"" in system_prompt
+
+
+def test_normal_title_email_has_no_title_less_guidance(session):
+    app = _seed_application(session)
+    model = FakeToolLoopModel([_verdict_call("same_application", app.id)])
+
+    run_disambiguation(
+        _current_email(),
+        _extracted(job_title="Engineer"),
+        [app],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    system_prompt = model.seen_messages[0][0].content
+    assert "does not name a job title" not in system_prompt
 
 
 def test_agent_hallucinated_id_raises(session):
