@@ -35,6 +35,9 @@ def test_gmail_status_not_connected_when_no_token(client, tmp_path):
 
 def test_gmail_status_connected_when_valid_token_exists(client, tmp_path):
     settings = _override_settings(client, tmp_path)
+    # A far-future expiry makes this a genuinely valid (unexpired) token. A
+    # google-auth token with no expiry at all is treated as already expired,
+    # so it must carry a real future expiry to test the valid path.
     settings.gmail_token_path.write_text(
         json.dumps(
             {
@@ -44,6 +47,7 @@ def test_gmail_status_connected_when_valid_token_exists(client, tmp_path):
                 "client_id": "fake-client-id",
                 "client_secret": "fake-client-secret",
                 "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+                "expiry": "2999-01-01T00:00:00.000000Z",
             }
         )
     )
@@ -62,6 +66,63 @@ def test_gmail_status_not_connected_on_corrupt_token_file(client, tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {"connected": False}
+
+
+def _expired_token_json():
+    return json.dumps(
+        {
+            "token": "old-access-token",
+            "refresh_token": "fake-refresh-token",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": "fake-client-id",
+            "client_secret": "fake-client-secret",
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            "expiry": "2020-01-01T00:00:00.000000Z",
+        }
+    )
+
+
+def test_gmail_status_disconnected_when_token_revoked(client, tmp_path, monkeypatch):
+    """Regression: a revoked/expired refresh token still sits in the file, so
+    presence alone must NOT report connected - otherwise the reconnect banner
+    never shows and the background sync fails with invalid_grant."""
+    settings = _override_settings(client, tmp_path)
+    settings.gmail_token_path.write_text(_expired_token_json())
+
+    from google.auth.exceptions import RefreshError
+    from google.oauth2.credentials import Credentials
+
+    def _raise(self, request):
+        raise RefreshError("Token has been expired or revoked.")
+
+    monkeypatch.setattr(Credentials, "refresh", _raise)
+
+    response = client.get("/api/gmail/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"connected": False}
+
+
+def test_gmail_status_refreshes_and_persists_expired_but_refreshable_token(client, tmp_path, monkeypatch):
+    """An expired token that CAN still be refreshed reports connected, and the
+    refreshed token is persisted so the next call/sync reuses it."""
+    settings = _override_settings(client, tmp_path)
+    settings.gmail_token_path.write_text(_expired_token_json())
+
+    from google.oauth2.credentials import Credentials
+
+    def _refresh(self, request):
+        self.token = "new-access-token"
+        self.expiry = None  # clears expiry -> creds.valid becomes True
+
+    monkeypatch.setattr(Credentials, "refresh", _refresh)
+
+    response = client.get("/api/gmail/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"connected": True}
+    saved = json.loads(settings.gmail_token_path.read_text())
+    assert saved["token"] == "new-access-token"
 
 
 def test_gmail_connect_redirects_to_google_when_secrets_exist(client, tmp_path):

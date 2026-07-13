@@ -2,14 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel
 
 from applysync.config import Settings
 from applysync.gmail.client import SCOPES
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/gmail", tags=["gmail-oauth"])
 
@@ -66,7 +72,29 @@ def register_gmail_oauth_routes(app, *, get_settings) -> None:
             creds = Credentials.from_authorized_user_file(str(settings.gmail_token_path), SCOPES)
         except (ValueError, OSError):
             return {"connected": False}
-        return {"connected": bool(creds and (creds.valid or creds.refresh_token))}
+        if creds is None:
+            return {"connected": False}
+        if creds.valid:
+            return {"connected": True}
+        # Not currently valid. Presence of a refresh_token alone is NOT enough:
+        # a revoked or expired refresh token still sits in the file, and
+        # reporting it as connected hid the reconnect banner while the
+        # background sync failed with invalid_grant. Only truly connected if the
+        # token can actually be refreshed - so attempt it and report honestly.
+        if not (creds.expired and creds.refresh_token):
+            return {"connected": False}
+        try:
+            creds.refresh(GoogleAuthRequest())
+        except RefreshError:
+            # Revoked/expired beyond refresh (e.g. the OAuth app is in Testing
+            # mode, where refresh tokens expire after 7 days). Report
+            # disconnected so the dashboard shows the Connect Gmail banner.
+            logger.info("Gmail token present but not refreshable; reporting disconnected")
+            return {"connected": False}
+        # Refresh succeeded: persist it so the next status check / sync reuses
+        # the new access token instead of refreshing again.
+        settings.gmail_token_path.write_text(creds.to_json())
+        return {"connected": True}
 
     @router.get(
         "/connect",
