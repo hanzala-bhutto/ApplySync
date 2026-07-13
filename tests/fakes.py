@@ -52,6 +52,59 @@ class FakeCompletionModel:
         return FakeResponse(self._content)
 
 
+class FakeAIResponse:
+    """An AIMessage-like object for the tool-loop fakes: only the attributes the
+    disambiguation agent loop reads (.content, .tool_calls). tool_calls is a list
+    of {"name", "args", "id"} dicts, matching LangChain's normalized shape."""
+
+    def __init__(self, content: str = "", tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+
+class FakeToolLoopModel:
+    """Stand-in for a chat model driven as a bind_tools agent loop
+    (model.bind_tools(tools).with_retry(...).invoke(messages)). Returns a
+    scripted sequence of FakeAIResponse objects, one per invoke - so a test can
+    script "call this tool, then submit the verdict"."""
+
+    def __init__(self, script):
+        self._script = list(script)
+        self.invocations = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def with_retry(self, **kwargs):
+        return self
+
+    def invoke(self, messages):
+        self.invocations += 1
+        if not self._script:
+            raise AssertionError("FakeToolLoopModel ran out of scripted responses")
+        return self._script.pop(0)
+
+
+class FakeExtractAndToolModel:
+    """A single fake that both does structured classify+extract
+    (with_structured_output, for classify_and_extract) AND drives a bind_tools
+    agent loop (for the disambiguation branch), so one model can be threaded
+    through the whole graph including the ambiguous-match route."""
+
+    def __init__(self, structured_model, agent_script):
+        self._structured = structured_model
+        self._agent = FakeToolLoopModel(agent_script)
+
+    def with_structured_output(self, schema):
+        return self._structured
+
+    def with_retry(self, **kwargs):
+        return self
+
+    def bind_tools(self, tools):
+        return self._agent
+
+
 class FakeSearchClient:
     """Stand-in for SearxngClient: returns canned results or raises, never
     touches a real SearXNG instance."""

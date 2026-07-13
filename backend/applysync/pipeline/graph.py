@@ -17,8 +17,10 @@ from applysync.gmail.client import GmailClient
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import build_search_query
 from applysync.llm import get_chat_model
+from applysync.search import get_search_client
 from applysync.pipeline.nodes import (
     make_classify_and_extract_node,
+    make_disambiguate_node,
     make_match_node,
     make_scrutinize_relevance_node,
     make_skip_node,
@@ -27,18 +29,40 @@ from applysync.pipeline.nodes import (
 from applysync.pipeline.state import EmailState
 
 
-def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) -> StateGraph:
+def build_graph(
+    model,
+    session: Session,
+    sources: SourcesConfig,
+    run_id: str,
+    *,
+    gmail_client=None,
+    search_client=None,
+) -> StateGraph:
     """One EmailState flows through this graph per invocation (one email per
     graph.invoke call, driven by the loop in process_emails). fetch_emails
     itself is not a graph node: it is a plain batch fetch in process_emails/
     run_sync, since LangGraph's per-node execution here operates on a single
     email at a time. See CLAUDE.md for the fuller rationale.
+
+    gmail_client/search_client are the dependencies of the disambiguation
+    agent (the ambiguous-match branch off match_existing_application). They are
+    optional: when either is absent (unit tests exercising the deterministic
+    path, or a degraded run), the ambiguous case falls open to a new
+    application instead of routing to the agent.
     """
     graph = StateGraph(EmailState)
+    agent_available = gmail_client is not None and search_client is not None
 
     graph.add_node("scrutinize_relevance", make_scrutinize_relevance_node(model, sources))
     graph.add_node("classify_and_extract", make_classify_and_extract_node(model, sources))
     graph.add_node("match_existing_application", make_match_node(session))
+    if agent_available:
+        graph.add_node(
+            "disambiguate_match",
+            make_disambiguate_node(
+                session, model=model, gmail_client=gmail_client, search_client=search_client
+            ),
+        )
     graph.add_node("upsert_db", make_upsert_node(session, run_id=run_id))
     graph.add_node(
         "mark_scrutiny_rejected", make_skip_node(session, run_id=run_id, classification="scrutiny_rejected")
@@ -78,7 +102,22 @@ def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) ->
             "failed": "mark_extraction_failed",
         },
     )
-    graph.add_edge("match_existing_application", "upsert_db")
+    def _route_match(state):
+        # A resolved decision (clear new/update) goes straight to the writer.
+        # An ambiguous case (match left None, candidate_ids set) routes to the
+        # agent when it's wired in; without it, fall open to a new application.
+        if state.get("match") is not None:
+            return "resolved"
+        if agent_available and state.get("candidate_ids"):
+            return "ambiguous"
+        return "fall_open"
+
+    match_routes = {"resolved": "upsert_db", "fall_open": "upsert_db"}
+    if agent_available:
+        match_routes["ambiguous"] = "disambiguate_match"
+    graph.add_conditional_edges("match_existing_application", _route_match, match_routes)
+    if agent_available:
+        graph.add_edge("disambiguate_match", "upsert_db")
     graph.add_edge("upsert_db", END)
     graph.add_edge("mark_scrutiny_rejected", END)
     graph.add_edge("mark_irrelevant", END)
@@ -87,8 +126,19 @@ def build_graph(model, session: Session, sources: SourcesConfig, run_id: str) ->
     return graph
 
 
-def compile_graph(model, session: Session, sources: SourcesConfig, run_id: str, checkpointer=None):
-    return build_graph(model, session, sources, run_id).compile(checkpointer=checkpointer)
+def compile_graph(
+    model,
+    session: Session,
+    sources: SourcesConfig,
+    run_id: str,
+    checkpointer=None,
+    *,
+    gmail_client=None,
+    search_client=None,
+):
+    return build_graph(
+        model, session, sources, run_id, gmail_client=gmail_client, search_client=search_client
+    ).compile(checkpointer=checkpointer)
 
 
 def make_checkpointer(db_path: Path):
@@ -124,6 +174,8 @@ def process_emails(
     sources: SourcesConfig,
     run_id: str,
     checkpointer=None,
+    gmail_client=None,
+    search_client=None,
 ) -> dict:
     """Core, unit-testable pipeline logic: filters out already-processed
     emails, runs each new one through the graph, and tallies stats. Takes
@@ -137,7 +189,15 @@ def process_emails(
     custom state reducer here (later updates simply overwrite the same keys,
     matching what .invoke() returned before this change).
     """
-    compiled = compile_graph(model, session, sources, run_id, checkpointer=checkpointer)
+    compiled = compile_graph(
+        model,
+        session,
+        sources,
+        run_id,
+        checkpointer=checkpointer,
+        gmail_client=gmail_client,
+        search_client=search_client,
+    )
 
     new_emails = [e for e in emails if not repo.is_processed(session, e.message_id)]
 
@@ -228,6 +288,7 @@ def run_sync(settings: Settings | None = None) -> dict:
 
         model = get_chat_model(settings)
         client = GmailClient(settings)
+        search_client = get_search_client(settings)
         last_run_started_at = repo.last_successful_run_started_at(session)
         after_date = (
             last_run_started_at.date() - timedelta(days=SYNC_LOOKBACK_BUFFER_DAYS)
@@ -245,6 +306,8 @@ def run_sync(settings: Settings | None = None) -> dict:
             sources=sources,
             run_id=run_id,
             checkpointer=checkpointer,
+            gmail_client=client,
+            search_client=search_client,
         )
 
         repo.finish_pipeline_run(session, run_id, **stats)

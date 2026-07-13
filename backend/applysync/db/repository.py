@@ -4,6 +4,7 @@ import json
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
 from applysync.db.models import (
@@ -53,6 +54,26 @@ def mark_processed(
     session.commit()
 
 
+def find_candidate_applications(
+    session: Session, *, company_name: str
+) -> list[Application]:
+    """Every application for the same company (normalized: case, whitespace,
+    legal suffixes), regardless of job_title OR platform. This is the candidate
+    set the disambiguation agent reasons over when the exact-title match in
+    find_matching_application misses but the company clearly already exists on
+    record - the documented missing-title-vs-different-title gap. Platform is
+    deliberately NOT a filter (see find_matching_application): it is a per-email
+    attribution label, not identity, so candidates must span platforms.
+
+    Normalization happens in Python, not SQL - fine at this project's scale (a
+    personal application tracker, not a high-volume table). Ordered by id so the
+    oldest row is considered first, deterministically.
+    """
+    target_company = _normalize_for_matching(company_name)
+    candidates = session.exec(select(Application).order_by(Application.id)).all()
+    return [c for c in candidates if _normalize_for_matching(c.company_name) == target_company]
+
+
 def find_matching_application(
     session: Session, company_name: str, job_title: str
 ) -> Application | None:
@@ -68,19 +89,13 @@ def find_matching_application(
 
     Normalization (case, whitespace, legal suffixes) still applies so "EGYM" and
     "EGYM SE" match. Remaining ambiguous cases (a missing title vs a genuinely
-    different one) are the disambiguation agent's job, not this function.
-    Ordered by id so the oldest matching row wins, deterministically. A full
-    Python scan is fine at this project's scale (a personal tracker).
+    different one) are the disambiguation agent's job (see
+    find_candidate_applications), not this function. The oldest matching row
+    wins, deterministically.
     """
-    target_company = _normalize_for_matching(company_name)
     target_title = _normalize_for_matching(job_title)
-
-    candidates = session.exec(select(Application).order_by(Application.id)).all()
-    for candidate in candidates:
-        if (
-            _normalize_for_matching(candidate.company_name) == target_company
-            and _normalize_for_matching(candidate.job_title) == target_title
-        ):
+    for candidate in find_candidate_applications(session, company_name=company_name):
+        if _normalize_for_matching(candidate.job_title) == target_title:
             return candidate
     return None
 
@@ -211,6 +226,18 @@ def set_manual_status(session: Session, application_id: int, status: str) -> App
     return application
 
 
+class ApplicationIdentityConflict(RuntimeError):
+    """Updating an application's identity fields would collide with the
+    UNIQUE(company_name, job_title, platform, applied_date) of a *different*
+    existing application - i.e. the edit/reprocess would make this application a
+    duplicate of one already on record. Callers surface a clear 409 instead of
+    letting the raw sqlite IntegrityError bubble up as a 500."""
+
+    def __init__(self, message: str, *, existing_id: int | None = None):
+        super().__init__(message)
+        self.existing_id = existing_id
+
+
 def update_application_fields(
     session: Session,
     application_id: int,
@@ -222,6 +249,11 @@ def update_application_fields(
     """Inline-edit correction for extracted fields the LLM got wrong. Only
     overwrites fields actually passed in, so a partial edit (e.g. just
     platform) doesn't blank out the others.
+
+    Raises ApplicationIdentityConflict if the new identity tuple collides with a
+    different existing application (e.g. reprocessing #250 re-extracts a company
+    that already has an identical row), rather than letting the UNIQUE
+    constraint raise a raw IntegrityError.
     """
     application = session.get(Application, application_id)
     if application is None:
@@ -234,7 +266,30 @@ def update_application_fields(
         application.platform = platform
     application.updated_at = _utcnow()
     session.add(application)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        # rollback reverts the in-memory edits, so application now reflects the
+        # stored values again; recompute the intended identity to name the
+        # existing row the user collided with.
+        intended_company = company_name if company_name is not None else application.company_name
+        intended_title = job_title if job_title is not None else application.job_title
+        intended_platform = platform if platform is not None else application.platform
+        existing = session.exec(
+            select(Application).where(
+                Application.company_name == intended_company,
+                Application.job_title == intended_title,
+                Application.platform == intended_platform,
+                Application.applied_date == application.applied_date,
+                Application.id != application_id,
+            )
+        ).first()
+        raise ApplicationIdentityConflict(
+            "an application with the same company, title, platform and applied "
+            "date already exists",
+            existing_id=existing.id if existing else None,
+        ) from exc
     session.refresh(application)
     return application
 

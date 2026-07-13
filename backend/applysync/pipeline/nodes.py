@@ -250,20 +250,95 @@ def make_match_node(session: Session):
             company_name=extracted.company_name,
             job_title=extracted.job_title,
         )
-        if existing is None:
+        if existing is not None:
+            # Exact (normalized) company+title hit: the clear update case, no
+            # agent needed. Platform is not part of identity (see
+            # repo.find_matching_application).
+            return {"match": MatchDecision(action="update_existing", application_id=existing.id)}
+
+        candidates = repo.find_candidate_applications(
+            session, company_name=extracted.company_name
+        )
+        if not candidates:
+            # No prior application for this company at all: clearly new.
             return {"match": MatchDecision(action="new_application")}
-        return {"match": MatchDecision(action="update_existing", application_id=existing.id)}
+
+        # Ambiguous: the company already exists but no title matched exactly
+        # (the documented missing-title-vs-different-title gap). Leave `match`
+        # unset and surface the candidate ids so the graph routes to the
+        # disambiguation agent instead of blindly creating a new row.
+        return {"candidate_ids": [c.id for c in candidates], "match": None}
 
     return match_existing_application
+
+
+def make_disambiguate_node(session: Session, *, model, gmail_client, search_client):
+    """LLM tool-loop agent for the ambiguous match case (see
+    research/disambiguate.py). Fails OPEN to a new application on any agent
+    error - a possibly-redundant row is recoverable, wrongly merging two
+    distinct applications is not. Only ever reached when match_existing_
+    application left `match` unset with candidate_ids set.
+    """
+    from applysync.research.disambiguate import DisambiguationError, run_disambiguation
+
+    def disambiguate_match(state: EmailState) -> dict:
+        extracted = state["extracted"]
+        email = state["email"]
+        candidate_ids = state.get("candidate_ids") or []
+        candidates = [
+            app
+            for cid in candidate_ids
+            if (app := repo.get_application(session, cid)) is not None
+        ]
+        if not candidates:
+            return {"match": MatchDecision(action="new_application")}
+
+        try:
+            verdict = run_disambiguation(
+                email,
+                extracted,
+                candidates,
+                session=session,
+                gmail_client=gmail_client,
+                search_client=search_client,
+                model=model,
+            )
+        except DisambiguationError as exc:
+            logger.warning("Disambiguation failed, defaulting to new application: %s", exc)
+            return {"match": MatchDecision(action="new_application")}
+        except Exception:  # noqa: BLE001 - any agent/transport failure fails open
+            logger.exception("Disambiguation agent crashed, defaulting to new application")
+            return {"match": MatchDecision(action="new_application")}
+
+        if verdict.decision == "same_application" and verdict.matched_application_id:
+            match = MatchDecision(
+                action="update_existing", application_id=verdict.matched_application_id
+            )
+        elif verdict.decision == "duplicate" and verdict.matched_application_id:
+            match = MatchDecision(
+                action="duplicate_skip", application_id=verdict.matched_application_id
+            )
+        else:
+            match = MatchDecision(action="new_application")
+        return {"match": match, "disambiguation_reasoning": verdict.reasoning}
+
+    return disambiguate_match
 
 
 def make_upsert_node(session: Session, *, run_id: str):
     def upsert_db(state: EmailState) -> dict:
         email = state["email"]
         extracted = state["extracted"]
-        match = state["match"]
+        # A missing match means the ambiguous branch fell open (no agent wired
+        # in, or candidate_ids surfaced without a resolved decision): default to
+        # a new application, the same recoverable-over-destructive choice the
+        # agent's own error path makes.
+        match = state.get("match") or MatchDecision(action="new_application")
         platform = state.get("platform_hint") or "other"
         event_date = _parse_email_date(email.date)
+        # Present only when this email went through the disambiguation agent;
+        # stored on the event's notes so the dedupe/split decision is auditable.
+        notes = state.get("disambiguation_reasoning")
 
         if match.action == "new_application":
             application = repo.create_application(
@@ -284,6 +359,7 @@ def make_upsert_node(session: Session, *, run_id: str):
                 event_date=event_date,
                 source_email_id=email.message_id,
                 raw_extract_json=extracted.model_dump_json(),
+                notes=notes,
             )
         elif match.action == "update_existing":
             repo.add_status_event(
@@ -293,6 +369,7 @@ def make_upsert_node(session: Session, *, run_id: str):
                 event_date=event_date,
                 source_email_id=email.message_id,
                 raw_extract_json=extracted.model_dump_json(),
+                notes=notes,
             )
         # duplicate_skip: nothing to write, just fall through to mark_processed.
 
