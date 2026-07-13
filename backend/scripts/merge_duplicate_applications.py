@@ -109,12 +109,41 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="perform the merge (default: dry-run)")
     parser.add_argument("--db", type=Path, default=None, help="path to the SQLite db")
+    parser.add_argument(
+        "--ids",
+        type=str,
+        default=None,
+        help="comma-separated application ids to merge into one (lowest id canonical), "
+        "a manual override of the auto-grouping - use when rows are the same real "
+        "application but differ by title/company string (a human judgement call).",
+    )
     args = parser.parse_args()
 
     db_path = args.db or get_settings().db_path
     print(f"DB: {db_path}   mode: {'APPLY' if args.apply else 'DRY-RUN'}")
 
     with Session(get_engine(db_path)) as session:
+        if args.ids:
+            ids = [int(x) for x in args.ids.split(",")]
+            group = [a for a in (session.get(Application, i) for i in ids) if a is not None]
+            missing = set(ids) - {a.id for a in group}
+            if missing:
+                print(f"WARNING: ids not found, skipped: {sorted(missing)}")
+            if len(group) < 2:
+                print("Need at least 2 existing ids to merge. Nothing to do.")
+                return
+            plan = merge_group(session, group, apply=args.apply)
+            print("-" * 70)
+            print(f"  keep #{plan['canonical_id']}  {plan['canonical_name']!r} / {plan['canonical_title']!r}")
+            print(f"  merge ids {plan['merged_ids']}  (platforms: {plan['merged_platforms']})")
+            print(f"  names seen: {plan['merged_names']}")
+            print(f"  -> status={plan['final_status']} applied={plan['final_applied_date']} events={plan['event_count']}")
+            print("=" * 70)
+            print(f"{'merged' if args.apply else 'would merge'} {len(plan['merged_ids'])} row(s) into #{plan['canonical_id']}.")
+            if not args.apply:
+                print("Re-run with --apply to perform the merge.")
+            return
+
         groups = find_duplicate_groups(session)
         if not groups:
             print("No same-identity duplicate groups found. Nothing to merge.")
