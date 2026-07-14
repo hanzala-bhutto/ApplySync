@@ -389,14 +389,24 @@ def make_match_node(session: Session):
     return match_existing_application
 
 
-def make_disambiguate_node(session: Session, *, model, gmail_client, search_client):
+def make_disambiguate_node(
+    session: Session, *, model, gmail_client, search_client, escalation_model=None
+):
     """LLM tool-loop agent for the ambiguous match case (see
     research/disambiguate.py). Fails OPEN to a new application on any agent
     error - a possibly-redundant row is recoverable, wrongly merging two
     distinct applications is not. Only ever reached when match_existing_
     application left `match` unset with candidate_ids set.
+
+    escalation_model, if given, always runs this agent instead of model: unlike
+    scrutiny/classify_and_extract this node is already low-volume (only the
+    genuinely ambiguous match cases, ~50 calls per full sync vs. 500), so there's
+    no fast-path cost to always giving it the more careful model. Falls back to
+    model when no escalation model is configured.
     """
     from applysync.research.disambiguate import DisambiguationError, run_disambiguation
+
+    llm = escalation_model or model
 
     def disambiguate_match(state: EmailState) -> dict:
         extracted = state["extracted"]
@@ -418,7 +428,7 @@ def make_disambiguate_node(session: Session, *, model, gmail_client, search_clie
                 session=session,
                 gmail_client=gmail_client,
                 search_client=search_client,
-                model=model,
+                model=llm,
             )
         except DisambiguationError as exc:
             logger.warning("Disambiguation failed, defaulting to new application: %s", exc)
