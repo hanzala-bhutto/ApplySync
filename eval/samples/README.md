@@ -1,7 +1,9 @@
 # Eval gold dataset
 
-`gold.jsonl` lives here but is **gitignored**: every sample contains a real
-email body from the user's inbox (PII that must never land on GitHub).
+`gold.json` lives here but is **gitignored**: every sample contains a real
+email body from the user's inbox (PII that must never land on GitHub). It's
+a pretty-printed JSON array (not JSONL) with `verified`/`labels` before the
+body in each record, so it's directly reviewable/editable in a text editor.
 
 To (re)build it on this machine:
 

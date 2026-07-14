@@ -56,19 +56,24 @@ class EvalSample:
         )
 
     def to_dict(self) -> dict:
+        # Field order matters here: this dict is what gets pretty-printed to
+        # the review file (see save_samples), and a human reviewing it wants
+        # verified/labels visible first, the long body last - not needing to
+        # scroll past a paragraph of email text to find the fields they're
+        # actually checking.
         return {
             "message_id": self.message_id,
-            "sender": self.sender,
-            "subject": self.subject,
-            "date": self.date,
-            "body": self.body,
+            "verified": self.verified,
             "labels": {
                 "is_relevant": self.label_is_relevant,
                 "company_name": self.label_company,
                 "job_title": self.label_title,
                 "status": self.label_status,
             },
-            "verified": self.verified,
+            "sender": self.sender,
+            "subject": self.subject,
+            "date": self.date,
+            "body": self.body,
         }
 
 
@@ -265,14 +270,29 @@ def format_report(report: EvalReport, thresholds: Thresholds | None = None) -> s
     return "\n".join(lines)
 
 
-def load_samples(path, *, include_unverified: bool = False) -> list[EvalSample]:
-    samples = []
+def load_all_samples(path) -> list[EvalSample]:
+    """Every sample in the file regardless of verified status - used by the
+    dataset builder (which needs to preserve unverified ones too), not the
+    eval runner (see load_samples)."""
     with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            sample = EvalSample.from_dict(json.loads(line))
-            if sample.verified or include_unverified:
-                samples.append(sample)
-    return samples
+        raw = json.load(f)
+    return [EvalSample.from_dict(data) for data in raw]
+
+
+def load_samples(path, *, include_unverified: bool = False) -> list[EvalSample]:
+    all_samples = load_all_samples(path)
+    if include_unverified:
+        return all_samples
+    return [s for s in all_samples if s.verified]
+
+
+def save_samples(path, samples: list[EvalSample]) -> None:
+    """Pretty-printed JSON array, not JSONL: a human reviews/corrects this
+    file directly in an editor, and one record per unbroken line (JSONL's
+    whole point for streaming/appending) is unreadable once a record holds a
+    multi-paragraph email body. indent=2 costs nothing here - this dataset is
+    a few hundred records, not a streaming log."""
+    data = [s.to_dict() for s in samples]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")

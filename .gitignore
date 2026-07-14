@@ -20,6 +20,7 @@ token.json
 
 # Eval gold dataset holds real email bodies (PII) - regenerable via
 # backend/scripts/build_eval_dataset.py, never committed.
+eval/samples/*.json
 eval/samples/*.jsonl
 
 .pytest_cache/

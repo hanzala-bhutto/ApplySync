@@ -7,6 +7,9 @@ from applysync.evaluation import (
     StagePrediction,
     Thresholds,
     format_report,
+    load_all_samples,
+    load_samples,
+    save_samples,
     score_samples,
 )
 from applysync.pipeline.nodes import UNSPECIFIED_JOB_TITLE
@@ -149,3 +152,25 @@ def test_format_report_renders_without_error():
 def test_sample_round_trips_through_dict():
     sample = _sample()
     assert EvalSample.from_dict(sample.to_dict()) == sample
+
+
+def test_save_and_load_samples_round_trip_and_is_human_readable(tmp_path):
+    """save_samples must write a pretty-printed JSON array (verified/labels
+    before the long body in each record) that a human can review directly -
+    not one-line-per-record JSONL, which was unreadable once a record holds
+    a multi-paragraph email body."""
+    path = tmp_path / "gold.json"
+    verified = _sample(message_id="v1")
+    unverified = EvalSample(
+        message_id="u1", sender="a@b.com", subject="s", date="d", body="b",
+        label_is_relevant=False, verified=False,
+    )
+    save_samples(path, [verified, unverified])
+
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("[\n")  # pretty-printed array, not one object per line
+    assert '"verified": true' in text
+
+    assert load_all_samples(path) == [verified, unverified]
+    assert load_samples(path) == [verified]
+    assert load_samples(path, include_unverified=True) == [verified, unverified]

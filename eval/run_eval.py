@@ -11,7 +11,7 @@ This is the regression gate CLAUDE.md's LLM section describes as a manual
 compare. ~150 samples take a few minutes at the rate limit.
 
 Usage (from repo root, venv active):
-    python eval/run_eval.py [--samples eval/samples/gold.jsonl]
+    python eval/run_eval.py [--samples eval/samples/gold.json]
                             [--include-unverified] [--limit N] [--strict]
 
 --strict exits nonzero when thresholds fail, for use as a pre-merge check.
@@ -29,7 +29,7 @@ from applysync.gmail.models import RawEmail
 from applysync.llm import get_chat_model
 from applysync.pipeline.nodes import make_classify_and_extract_node, make_scrutinize_relevance_node
 
-DEFAULT_SAMPLES = Path("eval/samples/gold.jsonl")
+DEFAULT_SAMPLES = Path("eval/samples/gold.json")
 
 
 def run_pipeline_stages(samples, model, sources) -> dict[str, StagePrediction]:

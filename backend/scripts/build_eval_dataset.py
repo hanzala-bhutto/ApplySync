@@ -3,11 +3,14 @@
 Pre-fills each sample's labels from what the pipeline itself already stored
 (processed_emails.classification, and the raw_extract_json on the status
 event the email produced), so human labeling is a CORRECTION pass over
-eval/samples/gold.jsonl - review each sample, fix any wrong label, and flip
+eval/samples/gold.json - review each sample, fix any wrong label, and flip
 "verified" to true - rather than labeling from scratch. run_eval.py only
 scores verified samples by default, so an unreviewed pre-fill can never
 silently become ground truth (that would just measure the pipeline against
-its own output).
+its own output). Written as a pretty-printed JSON array (not JSONL) with
+labels/verified before the body in each record, specifically so it's
+reviewable/editable directly in a text editor - a wall of one-line-per-
+record JSON is unreadable once a record holds a multi-paragraph email.
 
 Samples contain real email bodies (PII): eval/samples/ is gitignored, and
 this script exists so the dataset is regenerable on this machine instead of
@@ -34,10 +37,10 @@ from applysync.config import get_settings
 from applysync.db import repository as repo
 from applysync.db.init_db import get_engine
 from applysync.db.models import ProcessedEmail
-from applysync.evaluation import EvalSample
+from applysync.evaluation import EvalSample, load_all_samples, save_samples
 from applysync.gmail.client import GmailClient
 
-DEFAULT_OUT = Path("eval/samples/gold.jsonl")
+DEFAULT_OUT = Path("eval/samples/gold.json")
 
 
 def pick_message_ids(session: Session, limit: int) -> list[str]:
@@ -83,17 +86,10 @@ def prefill_labels(session: Session, message_id: str) -> dict:
     return labels
 
 
-def load_existing(path: Path) -> dict[str, dict]:
+def load_existing(path: Path) -> dict[str, EvalSample]:
     if not path.exists():
         return {}
-    existing: dict[str, dict] = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                data = json.loads(line)
-                existing[data["message_id"]] = data
-    return existing
+    return {sample.message_id: sample for sample in load_all_samples(path)}
 
 
 def main() -> None:
@@ -132,15 +128,13 @@ def main() -> None:
                 label_status=labels["status"],
                 verified=False,
             )
-            existing[email.message_id] = sample.to_dict()
+            existing[email.message_id] = sample
             added += 1
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        for data in existing.values():
-            f.write(json.dumps(data, ensure_ascii=False) + "\n")
+    save_samples(args.out, list(existing.values()))
 
-    verified = sum(1 for d in existing.values() if d.get("verified"))
+    verified = sum(1 for s in existing.values() if s.verified)
     print(f"wrote {len(existing)} samples to {args.out} ({added} new, {verified} verified)")
     if verified < len(existing):
         print(
