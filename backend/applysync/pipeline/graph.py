@@ -72,7 +72,11 @@ def build_graph(
         graph.add_node(
             "disambiguate_match",
             make_disambiguate_node(
-                session, model=model, gmail_client=gmail_client, search_client=search_client
+                session,
+                model=model,
+                gmail_client=gmail_client,
+                search_client=search_client,
+                escalation_model=escalation_model,
             ),
         )
     graph.add_node("upsert_db", make_upsert_node(session, run_id=run_id))
