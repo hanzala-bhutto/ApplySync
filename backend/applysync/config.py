@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
 
     llm_model: str = "nvidia/nemotron-3-nano-30b-a3b"
+    # Used only for the rare escalation path (see nodes.py's classify_and_extract
+    # retry and scrutinize_relevance's ambiguous-case call): the larger, slower
+    # model this project ran before switching to nano for speed (see CLAUDE.md's
+    # LLM section) - a known-good fallback for the small minority of emails the
+    # fast model can't confidently handle, not something called per-email.
+    llm_escalation_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     nvidia_api_key: str = ""
     gmail_client_secrets_path: Path = Path(".secrets/credentials.json")
     gmail_token_path: Path = Path(".secrets/token.json")
