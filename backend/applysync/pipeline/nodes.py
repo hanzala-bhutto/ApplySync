@@ -33,13 +33,38 @@ UNSPECIFIED_JOB_TITLE = "(unspecified role)"
 # anyway often enough in practice (seen for real: "not specified", "unknown",
 # "n/a") that we normalize known variants defensively rather than trust the
 # instruction alone. Checked case-insensitively.
-_PLACEHOLDER_JOB_TITLES = {"not specified", "unknown", "n/a", "none", "null", "unspecified"}
+_PLACEHOLDER_JOB_TITLES = {
+    "not specified", "unknown", "n/a", "none", "null", "unspecified",
+    # A UI button/CTA label ("Join our Talent Pool") that bled into the
+    # extracted body text right where a real title would be, found by the
+    # eval harness - not an actual role.
+    "join our talent pool", "join talent pool",
+}
 
 
 def _normalize_job_title(job_title: str | None) -> str:
     if not job_title or job_title.strip().lower() in _PLACEHOLDER_JOB_TITLES:
         return UNSPECIFIED_JOB_TITLE
     return job_title
+
+
+# Same defensive normalization as job_title, for the same reason: the model
+# is told to leave company_name null when the email genuinely never states
+# the employer, but sometimes emits a literal placeholder word instead (seen
+# for real via the eval harness: the string "unknown"). Unlike job_title,
+# there is no dedicated sentinel to fall back to - null IS the correct
+# "genuinely not stated" value here (see classify_and_extract's
+# missing_required_fields path), so this just prevents a placeholder word
+# from masquerading as a real company.
+_PLACEHOLDER_COMPANY_NAMES = {"unknown", "n/a", "none", "null", "not specified", "not stated"}
+
+
+def _normalize_company_name(company_name: str | None) -> str | None:
+    if not company_name:
+        return None
+    if company_name.strip().lower() in _PLACEHOLDER_COMPANY_NAMES:
+        return None
+    return company_name
 
 _CLASSIFY_AND_EXTRACT_PROMPT = """Triage this email for a personal job application tracker.
 
@@ -50,13 +75,27 @@ section - only from the part of the email that is actually about the application
 If the real confirmation text itself never states the company, leave company_name null rather
 than using a name that only appears in a recommendations section.
 
-STEP 1 - is_relevant: True only if a real application was actually SUBMITTED and this email is a
-confirmation or status update about it. False for job alert digests, newsletters, marketing, or
-reminders about an INCOMPLETE / not-yet-submitted draft application - in any language (English
-e.g. "finish your application", "your application is incomplete"; German e.g. "Bewerbung
-abschliessen", "noch nicht abgeschlossen", "vergiss nicht deine Bewerbung", "weitermachen, wo du
-aufgehoert hast"). If the email is nudging you to go back and complete a draft, nothing was
-actually submitted yet, so mark is_relevant=False.
+STEP 1 - is_relevant: True whenever a real JOB application was actually SUBMITTED and this email
+is ANY status update about it - a REJECTION is just as relevant as an acceptance or interview
+invite. "we have decided to proceed with other candidates", "we regret to inform you", "leider
+absagen", "nach sorgfaeltiger Pruefung ... andere Bewerber" are all real status updates about a
+submitted job application, NOT a reason to mark the email irrelevant. is_relevant is only about
+whether a JOB application was submitted and this email concerns it - it has nothing to do with
+whether the news is good or bad (that judgment belongs in STEP 4's status field, not here).
+False for a submission/confirmation/status update about anything OTHER than a job application
+(e.g. an apartment rental application, a visa application, a loan application) even though the
+generic word "application" appears - this tracker is for job applications only.
+False also for a recruiting agency/platform/tool writing about ITSELF matching or reviewing you
+(e.g. "we're Clera, we connect engineers with great companies", "let's find the right fit",
+"we'll match you with opportunities") when no SPECIFIC real employer/role has actually been
+confirmed - that is the recruiter's own outreach or intake process, not a status update about a
+submitted job application to an actual employer.
+False for job alert digests, newsletters, marketing, or reminders about an INCOMPLETE /
+not-yet-submitted draft application - in any language (English e.g. "finish your application",
+"your application is incomplete"; German e.g. "Bewerbung abschliessen", "noch nicht
+abgeschlossen", "vergiss nicht deine Bewerbung", "weitermachen, wo du aufgehoert hast"). If the
+email is nudging you to go back and complete a draft, nothing was actually submitted yet, so mark
+is_relevant=False.
 
 STEP 2 - company_name (REQUIRED whenever is_relevant is True, the most important field): the
 actual employer/hiring company, from the actual confirmation text, sender display name/domain,
@@ -136,12 +175,23 @@ _NARROW_CONFIRMATION_PHRASES = [
 
 def _heuristic_scrutinize(email: RawEmail) -> Literal["pass", "reject", "ambiguous"]:
     subject_lower = email.subject.lower()
-    text = f"{subject_lower} {email.body[:500].lower()}"
+    body_prefix_lower = email.body[:500].lower()
+    text = f"{subject_lower} {body_prefix_lower}"
 
+    # Pass is checked BEFORE reject: a real Wolters Kluwer confirmation
+    # ("your job application ... has been successfully submitted") was
+    # wrongly scrutinized away because its OWN footer boilerplate ("manage
+    # job alerts / create job alerts", generic candidate-portal navigation)
+    # contains the substring "job alert" - one of the reject markers below -
+    # so reject fired before the confirmation phrase was ever checked. A
+    # narrow, high-precision confirmation match is strong enough evidence to
+    # win over an incidental reject-marker match in unrelated boilerplate;
+    # checked against the body prefix too, not just the subject, since a
+    # real confirmation phrase can appear in either.
+    if any(phrase in subject_lower or phrase in body_prefix_lower for phrase in _NARROW_CONFIRMATION_PHRASES):
+        return "pass"
     if any(marker in text for marker in _REJECT_MARKERS):
         return "reject"
-    if any(phrase in subject_lower for phrase in _NARROW_CONFIRMATION_PHRASES):
-        return "pass"
     return "ambiguous"
 
 
@@ -156,14 +206,21 @@ Body (truncated):
 {body}"""
 
 
-def make_scrutinize_relevance_node(model, sources: SourcesConfig):
+def make_scrutinize_relevance_node(model, sources: SourcesConfig, *, escalation_model=None):
     """Entry-point node: a heuristic pre-filter in front of the (rate-limited)
     classify_and_extract call. Clear passes/rejects cost 0 extra LLM calls;
     only the genuinely ambiguous middle bucket costs one cheap extra call -
     this is what keeps a broadened Gmail-side keyword filter from
     multiplying sync time by its false-positive rate.
+
+    escalation_model, if given, handles that one ambiguous-case call instead
+    of model: the heuristic already screened out every case cheap/clear
+    enough for the fast model to be worth trusting, so the rare remaining
+    call is exactly where a larger, more careful model earns its slower
+    latency. Falls back to model when no escalation model is configured.
     """
-    structured_model = model.with_structured_output(RelevanceOnlyResult).with_retry(
+    llm = escalation_model or model
+    structured_model = llm.with_structured_output(RelevanceOnlyResult).with_retry(
         stop_after_attempt=5, wait_exponential_jitter=True
     )
 
@@ -189,13 +246,36 @@ def make_scrutinize_relevance_node(model, sources: SourcesConfig):
     return scrutinize_relevance
 
 
-def make_classify_and_extract_node(model, sources: SourcesConfig):
+def make_classify_and_extract_node(model, sources: SourcesConfig, *, escalation_model=None):
+    """escalation_model, if given, gets ONE retry with the exact same prompt
+    when the fast model either fails outright (call/parse error) or comes
+    back without a usable company_name - the two concrete, unambiguous
+    failure signals already surfaced by this node's own logic, not a new
+    confidence judgment asked of the model. Deliberately narrow: this is not
+    called for every email, only the minority the fast model already
+    couldn't handle, keeping the rate-limited call volume close to what it
+    was before escalation existed.
+    """
     # NVIDIA's free-tier NIM endpoints can return a transient 503
     # ("Worker local total request limit reached") under shared load;
     # with_retry is LangChain's built-in backoff, not a hand-rolled loop.
     structured_model = model.with_structured_output(ClassifyAndExtractResult).with_retry(
         stop_after_attempt=5, wait_exponential_jitter=True
     )
+    escalation_structured_model = (
+        escalation_model.with_structured_output(ClassifyAndExtractResult).with_retry(
+            stop_after_attempt=5, wait_exponential_jitter=True
+        )
+        if escalation_model is not None
+        else None
+    )
+
+    def _invoke(structured, prompt, message_id):
+        try:
+            return structured.invoke([HumanMessage(content=prompt)])
+        except Exception as exc:  # noqa: BLE001 - LLM/parse failures must not crash the run
+            logger.warning("classify+extract failed for message %s: %s", message_id, exc)
+            return None
 
     def classify_and_extract(state: EmailState) -> dict:
         email = state["email"]
@@ -207,11 +287,15 @@ def make_classify_and_extract_node(model, sources: SourcesConfig):
             body=email.body[:4000],
         )
 
-        try:
-            result = structured_model.invoke([HumanMessage(content=prompt)])
-        except Exception as exc:  # noqa: BLE001 - LLM/parse failures must not crash the run
-            logger.warning("classify+extract failed for message %s: %s", email.message_id, exc)
-            result = None
+        result = _invoke(structured_model, prompt, email.message_id)
+        needs_escalation = result is None or (
+            result.is_relevant and not _normalize_company_name(result.company_name)
+        )
+        if needs_escalation and escalation_structured_model is not None:
+            logger.info("classify+extract escalating message %s to the larger model", email.message_id)
+            escalated = _invoke(escalation_structured_model, prompt, email.message_id)
+            if escalated is not None:
+                result = escalated
 
         if result is None:
             return {
@@ -224,7 +308,8 @@ def make_classify_and_extract_node(model, sources: SourcesConfig):
         if not result.is_relevant:
             return {"classification": "irrelevant", "platform_hint": platform_hint, "extracted": None, "error": None}
 
-        if not result.company_name:
+        company_name = _normalize_company_name(result.company_name)
+        if not company_name:
             return {
                 "classification": "relevant",
                 "platform_hint": platform_hint,
@@ -233,7 +318,7 @@ def make_classify_and_extract_node(model, sources: SourcesConfig):
             }
 
         extracted = JobApplicationEvent(
-            company_name=result.company_name,
+            company_name=company_name,
             job_title=_normalize_job_title(result.job_title),
             status=result.status or "other",
             job_url=result.job_url,

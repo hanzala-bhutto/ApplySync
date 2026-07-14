@@ -79,6 +79,29 @@ def test_find_matching_application_ignores_legal_suffix_differences(session):
     assert found.id == created.id
 
 
+def test_find_matching_application_ignores_gender_qualifier_differences(session):
+    """Regression test found by the eval harness: the same real posting can
+    arrive via different ATS templates with/without a gender/diversity
+    qualifier on the title (e.g. "(m/f/d)", "(f/m/x)", "(all genders)"),
+    which must not fragment the same application into two rows.
+    """
+    created = repo.create_application(
+        session,
+        company_name="Acme",
+        job_title="Full Stack AI Engineer",
+        platform="other",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+    found = repo.find_matching_application(
+        session, company_name="Acme", job_title="Full Stack AI Engineer (m/f/d)"
+    )
+
+    assert found is not None
+    assert found.id == created.id
+
+
 def test_find_matching_application_normalizes_case_and_whitespace(session):
     created = repo.create_application(
         session,
