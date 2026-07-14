@@ -1,3 +1,4 @@
+from langchain_core.callbacks import BaseCallbackHandler
 from langgraph.checkpoint.memory import MemorySaver
 from sqlmodel import select
 
@@ -5,6 +6,7 @@ from applysync.config import get_sources
 from applysync.db import repository as repo
 from applysync.db.models import Application, PipelineRun, ProcessedEmail, StatusEvent
 from applysync.gmail.models import RawEmail
+from applysync.pipeline import graph as graph_module
 from applysync.pipeline.graph import process_emails
 from applysync.pipeline.state import ClassifyAndExtractResult
 from tests.fakes import FakeExtractModel, FakeStructuredModel
@@ -181,6 +183,46 @@ def test_process_emails_tracks_incremental_progress_counters(session):
     assert run.emails_scrutinized == 1
     assert run.emails_extracted == 1
     assert run.emails_written == 1
+
+
+def test_langfuse_handler_groups_emails_under_the_run_id_session(session, monkeypatch):
+    """When a langfuse_handler is passed, every email's stream config should
+    carry the callback plus a langfuse_session_id matching this run's run_id -
+    that's what groups a whole sync into one browsable Langfuse session
+    instead of only individually filterable per-email traces."""
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
+    seen_configs = []
+
+    real_compile_graph = graph_module.compile_graph
+
+    def _spying_compile_graph(*args, **kwargs):
+        compiled = real_compile_graph(*args, **kwargs)
+        real_stream = compiled.stream
+
+        def _spying_stream(input_, config=None, **stream_kwargs):
+            seen_configs.append(config)
+            return real_stream(input_, config=config, **stream_kwargs)
+
+        compiled.stream = _spying_stream
+        return compiled
+
+    monkeypatch.setattr(graph_module, "compile_graph", _spying_compile_graph)
+
+    fake_handler = BaseCallbackHandler()
+    repo.create_pipeline_run(session, "run-lf")
+    process_emails(
+        [_email()],
+        model=model,
+        session=session,
+        sources=get_sources(),
+        run_id="run-lf",
+        checkpointer=MemorySaver(),
+        langfuse_handler=fake_handler,
+    )
+
+    assert len(seen_configs) == 1
+    assert seen_configs[0]["callbacks"] == [fake_handler]
+    assert seen_configs[0]["metadata"] == {"langfuse_session_id": "run-lf"}
 
 
 def test_scrutiny_rejected_email_never_reaches_classify_and_extract(session):

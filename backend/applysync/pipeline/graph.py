@@ -220,8 +220,10 @@ def process_emails(
     automatically to nested `.invoke()` calls made inside a node's own
     execution (same call stack, no per-node wiring), so this one handler
     traces every node, every LLM call, and the disambiguation agent's tool
-    loop for the whole run. None when tracing isn't configured - a sync must
-    behave identically either way.
+    loop for the whole run. Each email's trace is also tagged with this run's
+    run_id as a Langfuse session, so a whole sync shows up as one browsable
+    unit instead of only individually filterable per-email traces. None when
+    tracing isn't configured - a sync must behave identically either way.
     """
     compiled = compile_graph(
         model,
@@ -264,6 +266,10 @@ def process_emails(
         config = {"configurable": {"thread_id": email.message_id}}
         if langfuse_handler is not None:
             config["callbacks"] = [langfuse_handler]
+            # Groups every email's trace under this sync's run_id as a Langfuse
+            # session, so a whole sync is one browsable unit in the UI instead
+            # of only individually filterable traces.
+            config["metadata"] = {"langfuse_session_id": run_id}
         final_state: dict = {}
 
         for update in compiled.stream({"email": email}, config=config, stream_mode="updates"):

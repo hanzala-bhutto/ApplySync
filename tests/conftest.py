@@ -16,7 +16,7 @@ def session():
 
 @pytest.fixture
 def client():
-    from applysync.web.app import create_app, get_session
+    from applysync.web.app import create_app, get_langfuse_handler, get_session
 
     # StaticPool: FastAPI's TestClient runs sync routes on a worker thread,
     # and without a shared single connection, a fresh (tableless) in-memory
@@ -33,6 +33,10 @@ def client():
         yield test_session
 
     app.dependency_overrides[get_session] = override_get_session
+    # Tests must not depend on whether the developer's real .env happens to
+    # have Langfuse keys configured - always a no-op tracer here, same as
+    # every other real-service dependency this fixture overrides.
+    app.dependency_overrides[get_langfuse_handler] = lambda: None
 
     with TestClient(app) as c:
         c.db_session = test_session
