@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     # that powers the web-research features. Local, keyless, no external account.
     searxng_url: str = "http://localhost:8888"
 
+    # Self-hosted Langfuse (see langfuse/docker-compose.yml), NOT LangSmith - a
+    # hosted SaaS would ship email bodies off-machine, contradicting the
+    # local-first design. Tracing is a no-op whenever the keys are unset, so
+    # this is never required to run the pipeline (unit tests, degraded runs).
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "http://localhost:3000"
+
     # Relative paths in .env (the default for all three above) must resolve
     # against the project root, not whatever directory the process happens
     # to be started from - confirmed as a real bug: the Gmail OAuth web flow

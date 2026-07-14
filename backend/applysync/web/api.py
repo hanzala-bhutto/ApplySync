@@ -112,7 +112,13 @@ def _profile_to_response(profile) -> dict:
 
 
 def register_api_routes(
-    app, *, get_session, get_gmail_client, get_llm_model, get_search_client
+    app,
+    *,
+    get_session,
+    get_gmail_client,
+    get_llm_model,
+    get_search_client,
+    get_langfuse_handler=lambda: None,
 ) -> None:
     """Registers the JSON API on `app`. Takes the dependency callables as
     params rather than importing them, so this module doesn't need to import
@@ -268,6 +274,7 @@ def register_api_routes(
         session: Session = Depends(get_session),
         search_client: SearxngClient = Depends(get_search_client),
         model=Depends(get_llm_model),
+        langfuse_handler=Depends(get_langfuse_handler),
     ):
         application = repo.get_application(session, application_id)
         if application is None:
@@ -279,7 +286,10 @@ def register_api_routes(
 
         try:
             profile, source_urls = research_company(
-                application.company_name, search_client=search_client, model=model
+                application.company_name,
+                search_client=search_client,
+                model=model,
+                langfuse_handler=langfuse_handler,
             )
         except ResearchError as exc:
             # Plain-language message, not the raw exception - matches the

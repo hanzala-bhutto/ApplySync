@@ -17,6 +17,7 @@ from applysync.gmail.client import GmailClient
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import build_search_query
 from applysync.llm import get_chat_model
+from applysync.observability import get_langfuse_handler
 from applysync.search import get_search_client
 from applysync.pipeline.nodes import (
     make_classify_and_extract_node,
@@ -200,6 +201,7 @@ def process_emails(
     gmail_client=None,
     search_client=None,
     escalation_model=None,
+    langfuse_handler=None,
 ) -> dict:
     """Core, unit-testable pipeline logic: filters out already-processed
     emails, runs each new one through the graph, and tallies stats. Takes
@@ -212,6 +214,14 @@ def process_emails(
     reconstructed by merging each node's partial update, since there is no
     custom state reducer here (later updates simply overwrite the same keys,
     matching what .invoke() returned before this change).
+
+    langfuse_handler (see observability.get_langfuse_handler), if given, is
+    passed as a callback on every stream call: LangChain propagates callbacks
+    automatically to nested `.invoke()` calls made inside a node's own
+    execution (same call stack, no per-node wiring), so this one handler
+    traces every node, every LLM call, and the disambiguation agent's tool
+    loop for the whole run. None when tracing isn't configured - a sync must
+    behave identically either way.
     """
     compiled = compile_graph(
         model,
@@ -252,6 +262,8 @@ def process_emails(
 
     for email in new_emails:
         config = {"configurable": {"thread_id": email.message_id}}
+        if langfuse_handler is not None:
+            config["callbacks"] = [langfuse_handler]
         final_state: dict = {}
 
         for update in compiled.stream({"email": email}, config=config, stream_mode="updates"):
@@ -315,6 +327,7 @@ def run_sync(settings: Settings | None = None) -> dict:
         escalation_model = get_chat_model(settings, model_name=settings.llm_escalation_model)
         client = GmailClient(settings)
         search_client = get_search_client(settings)
+        langfuse_handler = get_langfuse_handler(settings)
         last_run_started_at = repo.last_successful_run_started_at(session)
         after_date = (
             last_run_started_at.date() - timedelta(days=SYNC_LOOKBACK_BUFFER_DAYS)
@@ -335,6 +348,7 @@ def run_sync(settings: Settings | None = None) -> dict:
             gmail_client=client,
             search_client=search_client,
             escalation_model=escalation_model,
+            langfuse_handler=langfuse_handler,
         )
 
         repo.finish_pipeline_run(session, run_id, **stats)

@@ -28,7 +28,6 @@ dependencies = [
 
 [project.optional-dependencies]
 observability = [
-    "langsmith>=0.1",
     "langfuse>=2.50",
 ]
 dev = [
