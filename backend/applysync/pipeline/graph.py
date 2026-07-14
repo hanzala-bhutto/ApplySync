@@ -37,6 +37,7 @@ def build_graph(
     *,
     gmail_client=None,
     search_client=None,
+    escalation_model=None,
 ) -> StateGraph:
     """One EmailState flows through this graph per invocation (one email per
     graph.invoke call, driven by the loop in process_emails). fetch_emails
@@ -49,12 +50,23 @@ def build_graph(
     optional: when either is absent (unit tests exercising the deterministic
     path, or a degraded run), the ambiguous case falls open to a new
     application instead of routing to the agent.
+
+    escalation_model is optional too: when absent, scrutinize_relevance and
+    classify_and_extract simply never escalate (fast model only), matching
+    behavior before escalation existed - unit tests and degraded runs don't
+    need a second model configured.
     """
     graph = StateGraph(EmailState)
     agent_available = gmail_client is not None and search_client is not None
 
-    graph.add_node("scrutinize_relevance", make_scrutinize_relevance_node(model, sources))
-    graph.add_node("classify_and_extract", make_classify_and_extract_node(model, sources))
+    graph.add_node(
+        "scrutinize_relevance",
+        make_scrutinize_relevance_node(model, sources, escalation_model=escalation_model),
+    )
+    graph.add_node(
+        "classify_and_extract",
+        make_classify_and_extract_node(model, sources, escalation_model=escalation_model),
+    )
     graph.add_node("match_existing_application", make_match_node(session))
     if agent_available:
         graph.add_node(
@@ -135,9 +147,16 @@ def compile_graph(
     *,
     gmail_client=None,
     search_client=None,
+    escalation_model=None,
 ):
     return build_graph(
-        model, session, sources, run_id, gmail_client=gmail_client, search_client=search_client
+        model,
+        session,
+        sources,
+        run_id,
+        gmail_client=gmail_client,
+        search_client=search_client,
+        escalation_model=escalation_model,
     ).compile(checkpointer=checkpointer)
 
 
@@ -176,6 +195,7 @@ def process_emails(
     checkpointer=None,
     gmail_client=None,
     search_client=None,
+    escalation_model=None,
 ) -> dict:
     """Core, unit-testable pipeline logic: filters out already-processed
     emails, runs each new one through the graph, and tallies stats. Takes
@@ -197,6 +217,7 @@ def process_emails(
         checkpointer=checkpointer,
         gmail_client=gmail_client,
         search_client=search_client,
+        escalation_model=escalation_model,
     )
 
     new_emails = [e for e in emails if not repo.is_processed(session, e.message_id)]
@@ -287,6 +308,7 @@ def run_sync(settings: Settings | None = None) -> dict:
         repo.create_pipeline_run(session, run_id)
 
         model = get_chat_model(settings)
+        escalation_model = get_chat_model(settings, model_name=settings.llm_escalation_model)
         client = GmailClient(settings)
         search_client = get_search_client(settings)
         last_run_started_at = repo.last_successful_run_started_at(session)
@@ -308,6 +330,7 @@ def run_sync(settings: Settings | None = None) -> dict:
             checkpointer=checkpointer,
             gmail_client=client,
             search_client=search_client,
+            escalation_model=escalation_model,
         )
 
         repo.finish_pipeline_run(session, run_id, **stats)

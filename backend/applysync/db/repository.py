@@ -25,9 +25,19 @@ _LEGAL_SUFFIXES = {
     "se", "gmbh", "inc", "ltd", "ag", "co", "llc", "corp", "corporation", "limited", "plc",
 }
 
+# German/English gender/diversity qualifiers on a job title (e.g. "(m/f/d)",
+# "(f/m/x)", "(m/w/d)", "all genders") vary across emails for the exact same
+# posting depending on which ATS template sent it - found by the eval
+# harness scoring a real title pair as a mismatch purely over the presence
+# of "(m/f/d)". Stripped only for the match lookup, same as legal suffixes.
+_GENDER_QUALIFIER_RE = re.compile(
+    r"\(\s*[mwfdx]\s*(?:/\s*[mwfdx]\s*){1,2}\s*\)|\(\s*all\s+genders\s*\)", re.IGNORECASE
+)
+
 
 def _normalize_for_matching(name: str) -> str:
-    normalized = re.sub(r"[.,]", "", name.lower().strip())
+    normalized = _GENDER_QUALIFIER_RE.sub("", name.lower().strip())
+    normalized = re.sub(r"[.,]", "", normalized)
     words = normalized.split()
     while words and words[-1] in _LEGAL_SUFFIXES:
         words.pop()

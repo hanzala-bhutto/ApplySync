@@ -11,14 +11,18 @@ from applysync.config import Settings
 _NVIDIA_FREE_TIER_RPM = 40
 
 
-def get_chat_model(settings: Settings) -> ChatNVIDIA:
+def get_chat_model(settings: Settings, *, model_name: str | None = None) -> ChatNVIDIA:
+    """model_name overrides settings.llm_model - used to construct the
+    escalation model (see settings.llm_escalation_model) with the same
+    rate limiter/temperature/reasoning config as the default model, just a
+    different (larger, slower) underlying model name."""
     rate_limiter = InMemoryRateLimiter(
         requests_per_second=_NVIDIA_FREE_TIER_RPM / 60,
         check_every_n_seconds=0.1,
         max_bucket_size=1,
     )
     return ChatNVIDIA(
-        model=settings.llm_model,
+        model=model_name or settings.llm_model,
         api_key=settings.nvidia_api_key,
         rate_limiter=rate_limiter,
         # Extraction should be conservative and repeatable, not creative:

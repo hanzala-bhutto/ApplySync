@@ -13,8 +13,12 @@ compare. ~150 samples take a few minutes at the rate limit.
 Usage (from repo root, venv active):
     python eval/run_eval.py [--samples eval/samples/gold.json]
                             [--include-unverified] [--limit N] [--strict]
+                            [--no-escalation]
 
 --strict exits nonzero when thresholds fail, for use as a pre-merge check.
+--no-escalation runs the fast model alone (no settings.llm_escalation_model
+call), to isolate how much of the measured accuracy comes from escalation
+specifically vs. the base model/prompt.
 """
 from __future__ import annotations
 
@@ -32,9 +36,9 @@ from applysync.pipeline.nodes import make_classify_and_extract_node, make_scruti
 DEFAULT_SAMPLES = Path("eval/samples/gold.json")
 
 
-def run_pipeline_stages(samples, model, sources) -> dict[str, StagePrediction]:
-    scrutinize = make_scrutinize_relevance_node(model, sources)
-    classify_and_extract = make_classify_and_extract_node(model, sources)
+def run_pipeline_stages(samples, model, sources, *, escalation_model=None) -> dict[str, StagePrediction]:
+    scrutinize = make_scrutinize_relevance_node(model, sources, escalation_model=escalation_model)
+    classify_and_extract = make_classify_and_extract_node(model, sources, escalation_model=escalation_model)
 
     predictions: dict[str, StagePrediction] = {}
     for i, sample in enumerate(samples, start=1):
@@ -78,6 +82,9 @@ def main() -> int:
     )
     parser.add_argument("--limit", type=int, default=None, help="only run the first N samples")
     parser.add_argument("--strict", action="store_true", help="exit 1 if thresholds fail")
+    parser.add_argument(
+        "--no-escalation", action="store_true", help="disable the escalation model, fast model only"
+    )
     args = parser.parse_args()
 
     samples = load_samples(args.samples, include_unverified=args.include_unverified)
@@ -90,9 +97,17 @@ def main() -> int:
         )
         return 1
 
-    print(f"running {len(samples)} samples against the real model (rate-limited)...")
     settings = get_settings()
-    predictions = run_pipeline_stages(samples, get_chat_model(settings), get_sources())
+    escalation_model = (
+        None if args.no_escalation else get_chat_model(settings, model_name=settings.llm_escalation_model)
+    )
+    print(
+        f"running {len(samples)} samples against the real model "
+        f"({'escalation enabled' if escalation_model else 'fast model only'}, rate-limited)..."
+    )
+    predictions = run_pipeline_stages(
+        samples, get_chat_model(settings), get_sources(), escalation_model=escalation_model
+    )
 
     report = score_samples(samples, predictions)
     thresholds = Thresholds()
