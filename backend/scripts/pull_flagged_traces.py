@@ -1,15 +1,22 @@
-"""Pull emails you flagged wrong in Langfuse into the eval gold dataset for
-re-review, closing the loop between "I noticed this in the dashboard" and
-the eval harness (see build_eval_dataset.py) actually tracking it.
+"""Pull emails flagged wrong in Langfuse (by a human, or the LLM-judge
+evaluators) into the eval gold dataset for re-review, closing the loop
+between "this looked wrong" and the eval harness (see build_eval_dataset.py)
+actually tracking it.
 
-Convention: in the Langfuse UI, create a Boolean score config named "correct"
-(Settings > Scores, once) and annotate any trace you disagree with by setting
-correct=false - optionally with a comment noting what should have been
-extracted instead. This script finds every trace scored correct=false, pulls
-its source email and the pipeline's own (wrong) output, and writes it into
-eval/samples/gold.json as an UNVERIFIED sample (mirroring build_eval_dataset.py's
-prefill: a flag is a reason to look again, not a ground-truth label by itself -
-a human still has to open the file and write the correct labels).
+Convention: three Boolean score configs (Settings > Scores, once) -
+relevance_correct, extraction_correct, disambiguation_correct - one per
+pipeline stage, mirroring the eval harness's own per-stage metrics. Set to
+false either manually in the UI (optionally with a comment noting what should
+have been extracted instead) or automatically by an LLM-as-judge evaluator
+(see docs/feasibility/langfuse-llm-judge.md; evaluators here are run
+manually/on-demand via the UI's Actions -> Evaluate, not live, to keep judge
+LLM calls from contending with the pipeline's own rate-limited sync traffic).
+This script finds every trace scored false on any of the given score names,
+pulls its source email and the pipeline's own (wrong) output, and writes it
+into eval/samples/gold.json as an UNVERIFIED sample (mirroring
+build_eval_dataset.py's prefill: a flag is a reason to look again, not a
+ground-truth label by itself - a human still has to open the file and write
+the correct labels).
 
 Only LangGraph-level traces (the ones with an `email` key in their input,
 i.e. one full email's run through the pipeline) are pulled; a scored trace
@@ -17,12 +24,15 @@ for a standalone call (e.g. company research) is skipped since it has no
 eval-comparable shape.
 
 Usage (from repo root, venv active, LANGFUSE_PUBLIC_KEY/SECRET_KEY set):
-    python backend/scripts/pull_flagged_traces.py [--score-name correct] [--out PATH]
+    python backend/scripts/pull_flagged_traces.py \
+        [--score-name relevance_correct extraction_correct disambiguation_correct] \
+        [--out PATH]
 """
 from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 
 import httpx
@@ -31,38 +41,44 @@ from applysync.config import get_settings
 from applysync.evaluation import EvalSample, load_all_samples, save_samples
 
 DEFAULT_OUT = Path("eval/samples/gold.json")
+DEFAULT_SCORE_NAMES = ["relevance_correct", "extraction_correct", "disambiguation_correct"]
 
 
-def _fetch_flagged_trace_ids(client: httpx.Client, score_name: str) -> dict[str, str | None]:
-    """Returns {trace_id: comment_or_None} for every BOOLEAN score named
-    score_name with value=false, deduped (a trace can be scored more than
-    once; the last comment seen wins - good enough for a manual workflow)."""
-    trace_comments: dict[str, str | None] = {}
-    cursor: str | None = None
-    while True:
-        params = {
-            "name": score_name,
-            "dataType": "BOOLEAN",
-            "value": "false",
-            "fields": "subject,details",
-            "limit": 100,
-        }
-        if cursor:
-            params["cursor"] = cursor
-        response = client.get("/api/public/v3/scores", params=params)
-        response.raise_for_status()
-        payload = response.json()
-        for score in payload.get("data", []):
-            subject = score.get("subject") or {}
-            trace_id = subject.get("traceId") or (
-                subject.get("id") if subject.get("kind") == "trace" else None
-            )
-            if trace_id:
-                trace_comments[trace_id] = score.get("comment")
-        cursor = (payload.get("meta") or {}).get("cursor")
-        if not cursor:
-            break
-    return trace_comments
+def _fetch_flagged_trace_ids(
+    client: httpx.Client, score_names: list[str]
+) -> dict[str, dict[str, str | None]]:
+    """Returns {trace_id: {flagged_score_name: comment_or_None}} for every
+    BOOLEAN score named any of score_names with value=false. A trace flagged
+    on more than one stage keeps all of them, since that's useful triage
+    signal (e.g. both extraction_correct and disambiguation_correct false
+    means the bad extraction likely caused the bad match too)."""
+    trace_flags: dict[str, dict[str, str | None]] = defaultdict(dict)
+    for score_name in score_names:
+        cursor: str | None = None
+        while True:
+            params = {
+                "name": score_name,
+                "dataType": "BOOLEAN",
+                "value": "false",
+                "fields": "subject,details",
+                "limit": 100,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            response = client.get("/api/public/v3/scores", params=params)
+            response.raise_for_status()
+            payload = response.json()
+            for score in payload.get("data", []):
+                subject = score.get("subject") or {}
+                trace_id = subject.get("traceId") or (
+                    subject.get("id") if subject.get("kind") == "trace" else None
+                )
+                if trace_id:
+                    trace_flags[trace_id][score_name] = score.get("comment")
+            cursor = (payload.get("meta") or {}).get("cursor")
+            if not cursor:
+                break
+    return dict(trace_flags)
 
 
 def _prefill_labels_from_trace_output(output: dict) -> dict:
@@ -83,7 +99,7 @@ def _prefill_labels_from_trace_output(output: dict) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--score-name", default="correct")
+    parser.add_argument("--score-name", nargs="+", default=DEFAULT_SCORE_NAMES)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -103,13 +119,13 @@ def main() -> None:
         auth=(settings.langfuse_public_key, settings.langfuse_secret_key),
         timeout=15.0,
     ) as client:
-        trace_comments = _fetch_flagged_trace_ids(client, args.score_name)
-        print(f"found {len(trace_comments)} trace(s) scored {args.score_name}=false")
+        trace_flags = _fetch_flagged_trace_ids(client, args.score_name)
+        print(f"found {len(trace_flags)} trace(s) flagged false on {', '.join(args.score_name)}")
 
         pulled = 0
         skipped_no_email = 0
-        comments_to_show = []
-        for trace_id, comment in trace_comments.items():
+        flags_to_show = []
+        for trace_id, flags in trace_flags.items():
             response = client.get(f"/api/public/traces/{trace_id}", params={"fields": "core,io"})
             response.raise_for_status()
             trace = response.json()
@@ -133,17 +149,19 @@ def main() -> None:
                 verified=False,
             )
             pulled += 1
-            if comment:
-                comments_to_show.append((email["message_id"], comment))
+            flags_to_show.append((email["message_id"], flags))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     save_samples(args.out, list(existing.values()))
     print(f"wrote {len(existing)} samples to {args.out} ({pulled} pulled, {skipped_no_email} skipped)")
 
-    if comments_to_show:
-        print("\nyour annotation comments (use these while correcting labels):")
-        for message_id, comment in comments_to_show:
-            print(f"  {message_id}: {comment}")
+    if flags_to_show:
+        print("\nflagged stage(s) and any annotation comments (use these while correcting labels):")
+        for message_id, flags in flags_to_show:
+            stage_summary = ", ".join(
+                f"{name}" + (f" ({comment})" if comment else "") for name, comment in flags.items()
+            )
+            print(f"  {message_id}: {stage_summary}")
 
     if pulled:
         print(
