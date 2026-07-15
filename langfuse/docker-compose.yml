@@ -74,16 +74,29 @@ services:
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
 
   clickhouse:
-    image: docker.io/clickhouse/clickhouse-server
+    # Pinned, not "latest": latest rolled to 26.6, whose new query analyzer
+    # breaks Langfuse v3's scores.all query (500 on the Scores page). The
+    # users.d config below forces the old analyzer to fix that; the pin keeps
+    # the version from drifting again on the next pull. See
+    # clickhouse/users.d/langfuse-old-analyzer.xml.
+    image: docker.io/clickhouse/clickhouse-server:26.6.1.1193
     restart: unless-stopped
     user: "101:101"
     environment:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: clickhouse
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      # The image's entrypoint otherwise regenerates
+      # /etc/clickhouse-server/users.d/default-user.xml from the two vars
+      # above on EVERY container start (not just first-run) - since that
+      # path is bind-mounted below, it was silently overwriting our own
+      # committed default-user.xml (which sources the password via
+      # from_env instead of a baked-in plaintext value) each restart.
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
     volumes:
       - langfuse_clickhouse_data:/var/lib/clickhouse
       - langfuse_clickhouse_logs:/var/log/clickhouse-server
+      - ./clickhouse/users.d:/etc/clickhouse-server/users.d
     ports:
       - "127.0.0.1:8123:8123"
       - "127.0.0.1:9000:9000"
