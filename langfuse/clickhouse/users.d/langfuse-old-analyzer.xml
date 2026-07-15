@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!--
+  Force ClickHouse's legacy query analyzer for every session.
+
+  Langfuse v3's generated SQL (e.g. the scores.all query) was written for the
+  old analyzer, which was ClickHouse's default through the 24.x line Langfuse
+  targets. ClickHouse 25.x+ flipped the default to the new analyzer
+  (enable_analyzer=1); on 26.6 that new analyzer fails the scores.all query with
+  "Not found column and(...)" on empty result blocks, surfacing in the UI as a
+  500 on the Scores page. Pinning the profile back to the old analyzer matches
+  Langfuse's assumptions and fixes it without downgrading ClickHouse or wiping
+  data. Remove this only if the pinned ClickHouse image moves to a version
+  Langfuse officially tests against with the new analyzer.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <enable_analyzer>0</enable_analyzer>
+        </default>
+    </profiles>
+</clickhouse>

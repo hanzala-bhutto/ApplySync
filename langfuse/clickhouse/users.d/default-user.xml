@@ -1,0 +1,25 @@
+<clickhouse>
+  <!-- Docs: <https://clickhouse.com/docs/operations/settings/settings_users/> -->
+  <users>
+    <!-- Remove default user -->
+    <default remove="remove">
+    </default>
+
+    <clickhouse>
+      <profile>default</profile>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <!-- Pulled from the container's own CLICKHOUSE_PASSWORD env var (already
+           set on this service in docker-compose.yml from langfuse/.env) rather
+           than baked in here - this file is committed to git, and a real
+           secret has no business being in tracked, plaintext XML. Requires
+           CLICKHOUSE_SKIP_USER_SETUP=1 on the service (see docker-compose.yml)
+           or the image's own entrypoint overwrites this file with a
+           plaintext-password version on every container start. -->
+      <password from_env="CLICKHOUSE_PASSWORD"></password>
+      <quota>default</quota>
+      <access_management>0</access_management>
+    </clickhouse>
+  </users>
+</clickhouse>
