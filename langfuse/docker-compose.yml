@@ -1,0 +1,167 @@
+# Self-hosted Langfuse for ApplySync's pipeline/agent observability.
+#
+# Start it (from this directory, in your own terminal):
+#   docker compose up -d
+# Stop it:
+#   docker compose down
+# First run: open http://localhost:3000, sign up (local-only account, no
+# external service), create a project, and put its API keys into the
+# project's .env (LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST).
+#
+# This is the official Langfuse v3 self-hosting stack (langfuse.com/self-hosting):
+# unlike SearXNG's single container, Langfuse's own architecture needs
+# Postgres (transactional data), ClickHouse (trace/analytics storage), Redis
+# (queue for the async worker) and MinIO (S3-compatible blob storage for
+# large trace payloads) - not optional extras we added, this is what upstream
+# ships. All secrets below come from langfuse/.env (gitignored); see
+# .env.example for what to generate (`openssl rand -hex 32`/`-hex 16`).
+services:
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3030:3030"
+    environment: &langfuse-worker-env
+      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      SALT: ${SALT}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      # Real bug found bringing this stack up for the first time: omitting
+      # this makes the image default to cluster mode, which runs migrations
+      # as `ON CLUSTER default` and fails outright with no Zookeeper
+      # configured - this is a single-node ClickHouse, not a cluster.
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_AUTH}
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  minio:
+    image: cgr.dev/chainguard/minio
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:9090:9000"
+      - "127.0.0.1:9091:9001"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  redis:
+    image: docker.io/redis:7
+    restart: unless-stopped
+    command: >
+      --requirepass ${REDIS_AUTH}
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: docker.io/postgres:17
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      # Host port 15432, not 5432: a real bug found running this stack for the
+      # first time - a local Postgres install already held 5432, and Windows
+      # exclusive socket binding made Docker fail to bind it, not just warn.
+      # Only affects host-side debugging access; the other containers still
+      # reach this one internally via postgres:5432.
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  langfuse_postgres_data:
+    driver: local
+  langfuse_clickhouse_data:
+    driver: local
+  langfuse_clickhouse_logs:
+    driver: local
+  langfuse_minio_data:
+    driver: local
+  langfuse_redis_data:
+    driver: local

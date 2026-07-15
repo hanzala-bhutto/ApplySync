@@ -83,6 +83,7 @@ def research_company(
     search_client: SearxngClient,
     model,
     max_results: int = 6,
+    langfuse_handler=None,
 ) -> tuple[CompanyProfileResult, list[str]]:
     """Search the web for a company and synthesize a grounded profile.
 
@@ -90,6 +91,11 @@ def research_company(
     can store them for human verification. Raises ResearchError if the search
     or the parse fails - the caller (the API endpoint) turns that into a clear
     error rather than a fabricated profile.
+
+    langfuse_handler (see observability.get_langfuse_handler), if given, traces
+    this call. Unlike the sync pipeline, this runs in its own request/thread
+    with no ambient LangGraph run to inherit callbacks from, so it must be
+    passed explicitly to model.invoke's config.
     """
     try:
         results = search_client.search(f"{display_name} company", max_results=max_results)
@@ -111,8 +117,11 @@ def research_company(
         # tier is a shared pool). PydanticOutputParser reads the model's plain
         # text output - see CompanyProfileResult's docstring for why we don't
         # use with_structured_output here.
+        invoke_kwargs = {}
+        if langfuse_handler is not None:
+            invoke_kwargs["config"] = {"callbacks": [langfuse_handler]}
         response = model.with_retry(stop_after_attempt=5, wait_exponential_jitter=True).invoke(
-            [HumanMessage(content=prompt)]
+            [HumanMessage(content=prompt)], **invoke_kwargs
         )
         profile = _PARSER.parse(response.content)
     except OutputParserException as exc:
