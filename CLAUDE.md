@@ -47,9 +47,11 @@ each session.
   phrases) only. `sources.yaml`'s `platforms` list with `sender_domains` is
   used only for best-effort dashboard labeling (`guess_platform`), never for
   filtering what gets fetched.
-- **Observability is phase 2.** Don't add LangSmith/Langfuse tracing or eval
-  scaffolding until the core pipeline (M1 through M4 below) works end-to-end. Don't
-  gold-plate this early.
+- **Observability and eval tooling landed as M5 (reliability phase), not
+  before.** The eval harness and self-hosted Langfuse tracing (see M5 below)
+  were deliberately built only after the core pipeline (M1-M4) worked
+  end-to-end - don't add more observability/eval scaffolding ahead of an
+  actual, demonstrated need for it now that this phase exists either.
 - **The `mcp__claude_ai_Gmail__*` MCP tools are for this assistant's own use in
   this session only.** The shipped application must implement its own Gmail
   API OAuth flow (`credentials.json` + cached `token.json`), never wire the
@@ -91,7 +93,9 @@ each session.
               Manual trigger: POST /api/sync -> background thread runs the pipeline once
               [Not built yet] Scheduler: OS-level scheduled task -> `applysync sync` daily
                               (in-process APScheduler ruled out, see M4)
-              [Phase 2] LangSmith / Langfuse tracing wraps the LangGraph run
+              Self-hosted Langfuse (langfuse/, docker-compose) traces every
+              node + agent tool loop of a sync; tracing is diagnostic only,
+              never load-bearing (see M5 step 2)
 ```
 
 **Tech choices** (see plan for full reasoning, don't relitigate without new
@@ -816,15 +820,136 @@ merged into `Application`. Locked with the user, ordered by dependency:
          numbers from unverified labels just measure the pipeline against
          its own past output. Matching/dedupe (merge precision/recall) eval
          is a documented follow-up - it needs seeded DB state per sample.
-      2. [ ] Langfuse observability, self-hosted (NOT LangSmith: hosted SaaS
-         would ship email bodies off-machine, contradicting the local-first
-         keyless design; Langfuse runs in docker-compose next to SearXNG).
+      2. [x] Langfuse observability, self-hosted (issue/PR #77, NOT
+         LangSmith: hosted SaaS would ship email bodies off-machine,
+         contradicting the local-first keyless design). `langfuse/`
+         (docker-compose.yml: the official v3 stack - Postgres, ClickHouse,
+         Redis, MinIO); `backend/applysync/observability.py`
+         (`get_langfuse_handler`, DI-style like `get_search_client`/
+         `get_llm_model`, returns `None` and disables tracing whenever
+         `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY` are unset or init fails - tracing
+         is diagnostic, never load-bearing). Threaded into `run_sync`/
+         `process_emails`'s stream config (LangChain propagates callbacks to
+         nested `.invoke()` calls automatically, so one handler traces every
+         node plus the disambiguation agent's whole tool loop) and
+         explicitly into `research_company`. Each email's trace is tagged
+         with the sync's `run_id` as a Langfuse session, so a whole sync
+         browses as one unit instead of scattered per-email traces.
+         `backend/scripts/pull_flagged_traces.py` closes the loop from
+         "noticed this is wrong in the Langfuse UI" to the eval harness
+         actually tracking it: score a trace false on a Boolean score config
+         and this script pulls it into `eval/samples/gold.json` as an
+         unverified sample. **Open PR #83** upgrades the original single
+         `correct` score to three per-stage ones
+         (`relevance_correct`/`extraction_correct`/`disambiguation_correct`,
+         mirroring the eval harness's own per-stage metrics) plus LLM-as-judge
+         evaluators (one per stage, fully MIT since Langfuse v3.65+) that can
+         auto-populate those scores - configured in Langfuse's own UI
+         (Settings/Evaluators, not files; judge prompts kept as a
+         version-controlled reference copy in
+         `docs/feasibility/langfuse-judge-prompts.md`) for **manual/backfill
+         triggering only, not live** - a live evaluator would call the
+         judge model from the Langfuse worker container, uncoordinated with
+         the pipeline's own shared rate limiter (below), risking budget
+         contention during a real sync. Two real bugs found bringing the
+         stack up for the first time: a local Postgres install already held
+         port 5432 (remapped to 15432, host-only); omitting
+         `CLICKHOUSE_CLUSTER_ENABLED=false` defaults the image to cluster
+         mode, which runs migrations `ON CLUSTER default` and fails with no
+         Zookeeper configured. A third, found later when ClickHouse's
+         `latest` tag drifted mid-project (issue/PR #81): ClickHouse 25.x+
+         changed its default query analyzer, breaking Langfuse's own
+         `scores.all` query (500 on the Scores page) - fixed by pinning the
+         image and mounting a `users.d` config forcing the legacy analyzer,
+         which in turn required `CLICKHOUSE_SKIP_USER_SETUP=1` (the image's
+         entrypoint otherwise regenerates that same mounted path from env
+         vars on every restart, silently overwriting the committed config
+         with a plaintext-password version) and re-declaring the
+         `clickhouse` user with its password sourced via
+         `from_env="CLICKHOUSE_PASSWORD"` rather than baked into the
+         tracked file. **Real gotcha discovered operating the stack**: since
+         `users.d` is bind-mounted from the git working directory, checking
+         out a branch that lacks these files (before they were merged to
+         `main`) deletes them live out from under the running container,
+         breaking ClickHouse auth immediately with no restart needed to
+         trigger it - resolved by getting the fix merged promptly, not by
+         changing the mount strategy.
       3. [ ] Confidence-routed merges: agent verdicts below a confidence bar
          become ReviewSuggestions (table + approve/reject UI already exist)
          instead of applying silently.
-      4. [ ] Tiered models: keep nano for high-volume extraction, larger
-         model for the low-volume disambiguation agent (~50 calls per full
-         sync vs 500), verified against the eval baseline from step 1.
+      4. [x] Tiered models (issues/PRs #72/#75, #74): `settings.
+         llm_escalation_model` (the larger, slower model this project ran
+         before switching to nano for speed) now serves three narrow,
+         mechanical escalation paths rather than a model swap everywhere -
+         the fast nano model still handles the vast majority of calls. (a)
+         `scrutinize_relevance`'s rare ambiguous-case call goes straight to
+         the escalation model. (b) `classify_and_extract` gets one
+         escalation-model retry when the fast call fails outright or returns
+         relevant with no usable company name. (c) `make_disambiguate_node`
+         always prefers the escalation model when configured (unconditional,
+         not failure-gated - this node is already low-volume, ~50 calls per
+         full sync vs 500 for extraction, and a wrong merge verdict is
+         unrecoverable the way a redundant new row is not). Verified against
+         the eval baseline from step 1, not just unit tests: scrutiny
+         false-rejects 1.9% -> 0.0%, classification accuracy 79.8% -> 98.2%,
+         status 92.9% -> 95.3%. The 98.2% number also caught and fixed a
+         severe pre-existing bug along the way (see the standalone
+         relevance-classification-accuracy entry below) - the escalation
+         model didn't cause that regression, measuring against a real
+         baseline is what finally surfaced it.
+      5. [x] Shared NVIDIA rate limiter (issue/PR #79): found via real
+         Langfuse traces - escalation-model calls occasionally took 15-30s+
+         instead of the usual 1-4s, the signature of `with_retry`'s backoff
+         kicking in after a 503. `get_chat_model` built a fresh
+         `InMemoryRateLimiter` on every call, so the fast and escalation
+         models each got their own independent 40 RPM budget, but NVIDIA's
+         cap is per-account, not per-model - the combined real request rate
+         could exceed 40 RPM even though each limiter thought it was
+         compliant. Fixed with one process-wide `lru_cache`'d limiter shared
+         by every `ChatNVIDIA` instance. Directly validates the Langfuse
+         investment: this class of latency bug was invisible before
+         per-call tracing existed.
+
+- [x] **Status-ordering and job-title extraction fixes** (issue/PR #67,
+      found by this project's first full historical resync - hundreds of
+      emails processed in one batch surfaced two bugs incremental syncs had
+      masked). (1) `add_status_event` unconditionally overwrote
+      `current_status` with whichever event was *processed* last, but
+      Gmail's search API returns results newest-first, not chronologically -
+      a batch sync could let a chronologically older email win over already-
+      recorded later ones (confirmed for real: an application stuck on
+      `applied` despite `rejected`/`interview` events already on record). Now
+      only advances `current_status` when the new event's `event_date` is
+      the latest on record; manual corrections still always win via
+      `event_date=now()`. (2) The model sometimes extracted the *type* of
+      interview/process step ("Technical Interview", "AI-powered video
+      interview") as `job_title` instead of the real role - a regex-based
+      net (`_PROCESS_STEP_JOB_TITLE_RE`) normalizes these to the unspecified
+      sentinel, alongside sharpened extraction-prompt guidance.
+- [x] **Relevance-classification accuracy fixes** (issue/PR #72/#75, found by
+      the eval harness's first real baseline: 150 verified real emails
+      scored only 79.8% classification accuracy, every single false negative
+      a rejection email wrongly marked irrelevant). `classify_and_extract`
+      systematically marked rejection emails (English and German) as
+      `is_relevant: False` - silently dropping roughly a quarter of real
+      application outcomes every sync, worse than a duplicate row since the
+      application looks correctly "applied" forever. Fixed by rewriting STEP
+      1 of the extraction prompt to explicitly separate "was an application
+      submitted" (`is_relevant`) from "is the news good or bad" (`status`) -
+      a rejection is exactly as relevant as an acceptance. Also fixed:
+      a scrutiny-heuristic ordering bug (an incidental "job alert" substring
+      in unrelated footer text rejected two real Wolters Kluwer confirmations
+      before the correct confirmation-phrase check ran), added
+      `_normalize_company_name` placeholder defense, and gender/diversity-
+      qualifier stripping ("(m/f/d)") in title matching so ATS template
+      variants of the same title still match. One prompt change was tried
+      and reverted after measurement: excluding trailing ATS reference
+      numbers from `job_title` caused the model to over-truncate real title
+      content after any dash/qualifier - a regression only the eval harness
+      caught, directly validating why it exists. Verified: scrutiny
+      false-rejects 1.9% -> 0.0%, classification accuracy 79.8% -> 98.2%,
+      status 92.9% -> 95.3%, company steady at 95.3% - every number measured,
+      not estimated.
 
 ## Feature workflow
 
