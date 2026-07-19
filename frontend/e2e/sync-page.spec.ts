@@ -64,6 +64,9 @@ test('sync page lists recent run history', async ({ page }) => {
         history: [
           pipelineRun({ id: 'run-1' }),
           pipelineRun({ id: 'run-0', errors: 'boom' }),
+          // Deliberately the pre-rename value (see docs/feasibility/full-audit-
+          // rename.md) - checks that an older stored run still displays under
+          // the current label, not just newly-created 'full_audit' runs.
           pipelineRun({ id: 'run-2', run_type: 'full_scan' }),
         ],
       },
@@ -74,7 +77,7 @@ test('sync page lists recent run history', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible()
   await expect(page.getByRole('cell', { name: 'Completed' }).first()).toBeVisible()
   await expect(page.getByRole('cell', { name: 'Failed' })).toBeVisible()
-  await expect(page.getByRole('cell', { name: 'Full scan' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'Full Audit' })).toBeVisible()
 })
 
 test('sync page has no detectable accessibility violations', async ({ page }) => {
@@ -96,9 +99,9 @@ test('sync page has no detectable accessibility violations', async ({ page }) =>
   expect(results.violations).toEqual([])
 })
 
-test('sync page shows a Full Scan control gated behind a confirm dialog', async ({ page }) => {
+test('sync page shows a Full Audit control gated behind a confirm dialog', async ({ page }) => {
   let posted = false
-  await page.route('**/api/sync/full-scan', async (route) => {
+  await page.route('**/api/sync/full-audit', async (route) => {
     if (route.request().method() === 'POST') {
       posted = true
       await route.fulfill({ status: 202, json: { status: 'started' } })
@@ -108,18 +111,18 @@ test('sync page shows a Full Scan control gated behind a confirm dialog', async 
   })
 
   await page.goto('/sync')
-  await expect(page.getByRole('heading', { name: 'Full Scan' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Full Audit' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Run Full Scan' }).first().click()
-  await expect(page.getByRole('heading', { name: 'Run a full scan?' })).toBeVisible()
+  await page.getByRole('button', { name: 'Run Full Audit' }).first().click()
+  await expect(page.getByRole('heading', { name: 'Run a full audit?' })).toBeVisible()
 
   // Cancelling must not trigger the request.
   await page.getByRole('button', { name: 'Cancel' }).click()
-  await expect(page.getByRole('heading', { name: 'Run a full scan?' })).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Run a full audit?' })).not.toBeVisible()
   expect(posted).toBe(false)
 
-  await page.getByRole('button', { name: 'Run Full Scan' }).first().click()
-  await page.getByRole('button', { name: 'Run Full Scan' }).last().click()
+  await page.getByRole('button', { name: 'Run Full Audit' }).first().click()
+  await page.getByRole('button', { name: 'Run Full Audit' }).last().click()
   await expect.poll(() => posted).toBe(true)
 })
 
@@ -129,7 +132,7 @@ test('sync page labels progress by the in-progress run type', async ({ page }) =
       json: {
         in_progress: true,
         last_error: null,
-        current_run_type: 'full_scan',
+        current_run_type: 'full_audit',
         latest_run: pipelineRun({ finished_at: null, emails_scrutinized: 2, emails_extracted: 1, emails_written: 0 }),
         history: [],
       },
@@ -137,17 +140,17 @@ test('sync page labels progress by the in-progress run type', async ({ page }) =
   })
 
   await page.goto('/sync')
-  await expect(page.getByText('Full scan in progress...')).toBeVisible()
+  await expect(page.getByText('Full Audit in progress...')).toBeVisible()
 })
 
-test('sync page shows suggestion count for a finished full scan, not the always-zero application/event counts', async ({ page }) => {
+test('sync page shows suggestion count for a finished full audit, not the always-zero application/event counts', async ({ page }) => {
   await page.route('**/api/sync/status*', async (route) => {
     await route.fulfill({
       json: {
         in_progress: false,
         last_error: null,
         current_run_type: null,
-        latest_run: pipelineRun({ run_type: 'full_scan', suggestions_created: 3, emails_relevant: 10 }),
+        latest_run: pipelineRun({ run_type: 'full_audit', suggestions_created: 3, emails_relevant: 10 }),
         history: [],
       },
     })
@@ -161,14 +164,14 @@ test('sync page shows suggestion count for a finished full scan, not the always-
   )
 })
 
-test('sync page shows a clean-scan message when a full scan finds nothing to review', async ({ page }) => {
+test('sync page shows a clean-audit message when a full audit finds nothing to review', async ({ page }) => {
   await page.route('**/api/sync/status*', async (route) => {
     await route.fulfill({
       json: {
         in_progress: false,
         last_error: null,
         current_run_type: null,
-        latest_run: pipelineRun({ run_type: 'full_scan', suggestions_created: 0, emails_relevant: 10 }),
+        latest_run: pipelineRun({ run_type: 'full_audit', suggestions_created: 0, emails_relevant: 10 }),
         history: [],
       },
     })
@@ -176,4 +179,72 @@ test('sync page shows a clean-scan message when a full scan finds nothing to rev
 
   await page.goto('/sync')
   await expect(page.getByText('nothing needed review.')).toBeVisible()
+})
+
+test('sync page shows a Stop control while in progress and reports a stopped run distinctly from a failed one', async ({ page }) => {
+  let stopRequested = false
+  let stopping = false
+  await page.route('**/api/sync/stop', async (route) => {
+    stopRequested = true
+    stopping = true
+    await route.fulfill({ status: 200, json: { status: 'stopping' } })
+  })
+
+  let inProgress = true
+  await page.route('**/api/sync/status*', async (route) => {
+    await route.fulfill({
+      json: {
+        in_progress: inProgress,
+        last_error: null,
+        current_run_type: inProgress ? 'incremental' : null,
+        stopping: inProgress ? stopping : false,
+        latest_run: pipelineRun({
+          finished_at: inProgress ? null : '2026-01-15T10:01:00Z',
+          emails_written: 2,
+          emails_total: 5,
+          errors: inProgress ? null : 'cancelled_by_user',
+        }),
+        history: [],
+      },
+    })
+  })
+
+  await page.goto('/sync')
+  // Scoped to #main-content: the header's own SyncButton also renders a
+  // Stop control while in_progress, so an unscoped locator is ambiguous.
+  const main = page.locator('#main-content')
+  const stopButton = main.getByRole('button', { name: 'Stop' })
+  await expect(stopButton).toBeVisible()
+
+  await stopButton.click()
+  await expect.poll(() => stopRequested).toBe(true)
+  await expect(main.getByRole('button', { name: 'Stopping…' })).toBeVisible()
+  // Both the status paragraph and the mutation's toast use this exact
+  // wording (a deliberate echo, not a bug) - scope to main content since an
+  // unscoped locator matches the toast too.
+  await expect(main.getByText('Stopping after the current email finishes...')).toBeVisible()
+
+  inProgress = false
+  await expect(main.getByText('Stopped: 2 of 5 emails processed before you stopped it.')).toBeVisible()
+  // The Stop button itself must disappear once the run has actually finished.
+  await expect(main.getByRole('button', { name: /Stop/ })).not.toBeVisible()
+})
+
+test('sync page recent-runs table labels a cancelled run "Stopped", not "Failed"', async ({ page }) => {
+  await page.route('**/api/sync/status*', async (route) => {
+    await route.fulfill({
+      json: {
+        in_progress: false,
+        last_error: null,
+        current_run_type: null,
+        stopping: false,
+        latest_run: pipelineRun({ errors: 'cancelled_by_user' }),
+        history: [pipelineRun({ id: 'run-1', errors: 'cancelled_by_user' }), pipelineRun({ id: 'run-2', errors: 'boom' })],
+      },
+    })
+  })
+
+  await page.goto('/sync')
+  await expect(page.getByRole('cell', { name: 'Stopped' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'Failed' })).toBeVisible()
 })

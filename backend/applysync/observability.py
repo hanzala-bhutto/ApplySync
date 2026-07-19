@@ -1,10 +1,53 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 
 from applysync.config import Settings
 
 logger = logging.getLogger(__name__)
+
+# In-process pub/sub for the /sync page's live pipeline-graph animation
+# (see docs/feasibility/pipeline-flow-visualization.md). Same "diagnostic,
+# never load-bearing" posture as Langfuse tracing above: process_emails/
+# process_full_audit call publish_node_event() unconditionally from their
+# own node-execution loop, and it is a near-free no-op whenever nobody is
+# subscribed via GET /api/sync/stream - the pipeline must behave identically
+# whether or not the Sync page happens to be open in a browser tab.
+#
+# Plain queue.Queue (thread-safe stdlib), not asyncio: sync/full-audit runs
+# execute in a background threading.Thread (see web/sync.py), not the async
+# event loop, so publishing has to work from a plain thread. The SSE route
+# bridges back to async via a threadpool read (see web/sync.py).
+_lock = threading.Lock()
+_subscribers: list[queue.Queue] = []
+
+
+def publish_node_event(node: str, message_id: str) -> None:
+    if not _subscribers:
+        return
+    event = {"node": node, "message_id": message_id}
+    with _lock:
+        subscribers = list(_subscribers)
+    for q in subscribers:
+        try:
+            q.put_nowait(event)
+        except queue.Full:
+            pass  # a slow/stuck subscriber must never block the pipeline
+
+
+def subscribe_to_node_events() -> queue.Queue:
+    q: queue.Queue = queue.Queue(maxsize=500)
+    with _lock:
+        _subscribers.append(q)
+    return q
+
+
+def unsubscribe_from_node_events(q: queue.Queue) -> None:
+    with _lock:
+        if q in _subscribers:
+            _subscribers.remove(q)
 
 
 def get_langfuse_handler(settings: Settings):

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getSyncStatus, postSync } from '../lib/api'
+import { getSyncStatus, postStopSync, postSync } from '../lib/api'
 import { useToast } from '../lib/toast'
 
 function formatLastSynced(finishedAt: string | null): string {
@@ -32,10 +32,19 @@ export function SyncButton() {
     },
   })
 
+  const stopMutation = useMutation({
+    mutationFn: postStopSync,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sync-status'] }),
+    onError: () => showToast({ message: 'Could not stop the sync.', variant: 'error' }),
+  })
+
   useEffect(() => {
     if (!data) return
     if (wasInProgress.current && !data.in_progress) {
-      if (data.last_error) {
+      const cancelled = data.latest_run?.errors === 'cancelled_by_user'
+      if (cancelled) {
+        showToast({ message: 'Sync stopped.', variant: 'success' })
+      } else if (data.last_error) {
         // Plain-language message, not the raw backend exception text (same
         // rule as every other mutation's error toast in this app) - the
         // detail is still in data.last_error for anyone checking the server
@@ -60,8 +69,18 @@ export function SyncButton() {
   return (
     <div className="flex items-center gap-2">
       <span className="hidden text-xs text-slate-500 sm:inline dark:text-slate-400">
-        {inProgress ? 'Syncing...' : formatLastSynced(data?.latest_run?.finished_at ?? null)}
+        {inProgress ? (data?.stopping ? 'Stopping...' : 'Syncing...') : formatLastSynced(data?.latest_run?.finished_at ?? null)}
       </span>
+      {inProgress && (
+        <button
+          type="button"
+          onClick={() => stopMutation.mutate()}
+          disabled={data?.stopping || stopMutation.isPending}
+          className="cursor-pointer rounded-lg border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-600 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-rose-800 dark:text-rose-400 dark:hover:bg-rose-950/40"
+        >
+          {data?.stopping ? 'Stopping…' : 'Stop'}
+        </button>
+      )}
       <button
         type="button"
         onClick={() => mutation.mutate()}

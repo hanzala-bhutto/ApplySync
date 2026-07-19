@@ -168,14 +168,18 @@ export interface PipelineRun {
   emails_extracted: number
   emails_written: number
   updated_at: string
-  run_type: 'incremental' | 'full_scan'
+  // 'full_scan' is the pre-rename value (see docs/feasibility/full-audit-
+  // rename.md) - older stored runs may still carry it, so display code
+  // must treat it the same as 'full_audit', not just the current runs.
+  run_type: 'incremental' | 'full_audit' | 'full_scan'
   suggestions_created: number
 }
 
 export interface SyncStatus {
   in_progress: boolean
   last_error: string | null
-  current_run_type: 'incremental' | 'full_scan' | null
+  current_run_type: 'incremental' | 'full_audit' | 'full_scan' | null
+  stopping: boolean
   latest_run: PipelineRun | null
   history: PipelineRun[]
 }
@@ -188,8 +192,12 @@ export function postSync(): Promise<{ status: string }> {
   return request('/api/sync', { method: 'POST' })
 }
 
-export function postFullScan(): Promise<{ status: string }> {
-  return request('/api/sync/full-scan', { method: 'POST' })
+export function postFullAudit(): Promise<{ status: string }> {
+  return request('/api/sync/full-audit', { method: 'POST' })
+}
+
+export function postStopSync(): Promise<{ status: string }> {
+  return request('/api/sync/stop', { method: 'POST' })
 }
 
 export interface ReviewSuggestion {

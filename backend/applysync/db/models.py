@@ -75,15 +75,17 @@ class PipelineRun(SQLModel, table=True):
     emails_extracted: int = 0
     emails_written: int = 0
     updated_at: datetime = Field(default_factory=_utcnow)
-    # Only meaningful for run_type="full_scan" (always 0 for an incremental
-    # sync, which never creates suggestions) - a full scan never auto-applies
+    # Only meaningful for run_type="full_audit" (always 0 for an incremental
+    # sync, which never creates suggestions) - a full audit never auto-applies
     # anything, so this is the number that actually answers "did this run
     # find anything worth looking at", not applications_created/events_created
-    # which are always 0 for a full scan by design.
+    # which are always 0 for a full audit by design.
     suggestions_created: int = 0
-    # "incremental" (normal Sync Now / applysync sync) or "full_scan" (see
+    # "incremental" (normal Sync Now / applysync sync) or "full_audit" (see
     # ReviewSuggestion below) - lets the /sync page's shared progress-bar UI
-    # distinguish which kind of run is in flight.
+    # distinguish which kind of run is in flight. Older rows may still hold
+    # the pre-rename value "full_scan" (see docs/feasibility/
+    # full-audit-rename.md) - display code should treat both as equivalent.
     run_type: str = "incremental"
 
 
@@ -116,7 +118,7 @@ class CompanyProfile(SQLModel, table=True):
 
 
 class ReviewSuggestion(SQLModel, table=True):
-    """A full-scan run's proposed change, never auto-applied: re-running
+    """A full-audit run's proposed change, never auto-applied: re-running
     today's pipeline against an already-processed email can disagree with
     what's currently stored (an improved prompt, a broadened keyword filter,
     or the scrutiny node's rare false positives/negatives), so the new

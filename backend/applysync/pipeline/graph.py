@@ -17,7 +17,8 @@ from applysync.gmail.client import GmailClient
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import build_search_query
 from applysync.llm import get_chat_model
-from applysync.observability import get_langfuse_handler
+from applysync.observability import get_langfuse_handler, publish_node_event
+from applysync.run_control import is_cancel_requested
 from applysync.search import get_search_client
 from applysync.pipeline.nodes import (
     make_classify_and_extract_node,
@@ -262,7 +263,17 @@ def process_emails(
         )
         last_flush = now
 
+    cancelled = False
     for email in new_emails:
+        if is_cancel_requested():
+            # Checked between emails, not mid-graph: a stop request finishes
+            # whatever email is already in flight (LangGraph checkpointing
+            # covers a crash mid-email, but there's no clean way to abort a
+            # graph.stream() call partway through, and doing so would leave
+            # that email's processed_emails/upsert state ambiguous) rather
+            # than aborting instantly.
+            cancelled = True
+            break
         config = {"configurable": {"thread_id": email.message_id}}
         if langfuse_handler is not None:
             config["callbacks"] = [langfuse_handler]
@@ -275,6 +286,7 @@ def process_emails(
         for update in compiled.stream({"email": email}, config=config, stream_mode="updates"):
             for node_name, node_output in update.items():
                 final_state.update(node_output or {})
+                publish_node_event(node_name, email.message_id)
                 if node_name == "scrutinize_relevance":
                     emails_scrutinized += 1
                 elif node_name == "classify_and_extract":
@@ -300,6 +312,7 @@ def process_emails(
         "emails_relevant": emails_relevant,
         "applications_created": applications_created,
         "events_created": events_created,
+        "cancelled": cancelled,
     }
 
 
@@ -357,7 +370,10 @@ def run_sync(settings: Settings | None = None) -> dict:
             langfuse_handler=langfuse_handler,
         )
 
-        repo.finish_pipeline_run(session, run_id, **stats)
+        cancelled = stats.pop("cancelled", False)
+        repo.finish_pipeline_run(
+            session, run_id, **stats, errors="cancelled_by_user" if cancelled else None
+        )
         return {"run_id": run_id, **stats}
 
 

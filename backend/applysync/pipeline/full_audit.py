@@ -13,7 +13,9 @@ from applysync.gmail.client import GmailClient
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import guess_platform
 from applysync.llm import get_chat_model
+from applysync.observability import publish_node_event
 from applysync.pipeline.nodes import make_classify_and_extract_node, make_scrutinize_relevance_node
+from applysync.run_control import is_cancel_requested
 from applysync.pipeline.state import JobApplicationEvent
 
 
@@ -60,7 +62,7 @@ def _previous_payload(application, event) -> str:
     )
 
 
-def process_full_scan(
+def process_full_audit(
     emails: list[RawEmail],
     *,
     model,
@@ -68,11 +70,14 @@ def process_full_scan(
     sources: SourcesConfig,
     run_id: str,
 ) -> dict:
-    """Core, unit-testable full-scan logic: given already-fetched emails
+    """Core, unit-testable full-audit logic: given already-fetched emails
     (real production code refetches every ever-processed message id, see
-    full_scan() below), re-runs scrutiny + classify-and-extract on each and
+    full_audit() below), re-runs scrutiny + classify-and-extract on each and
     queues a ReviewSuggestion wherever the new result disagrees with what's
-    on record. Never writes to Application/StatusEvent directly.
+    on record. Never writes to Application/StatusEvent directly - see
+    full_audit()'s docstring and docs/feasibility/full-audit-rename.md for
+    why that's a deliberate, load-bearing property of this pipeline, not
+    just a detail.
     """
     scrutinize = make_scrutinize_relevance_node(model, sources)
     classify_and_extract = make_classify_and_extract_node(model, sources)
@@ -85,19 +90,28 @@ def process_full_scan(
     emails_written = 0
     suggestions_created = 0
 
+    cancelled = False
     for email in emails:
+        if is_cancel_requested():
+            # Same between-email checkpoint as process_emails - see that
+            # function's comment for why an instant mid-email abort isn't
+            # attempted.
+            cancelled = True
+            break
         processed = session.get(ProcessedEmail, email.message_id)
         old_event = repo.find_status_event_by_source_email(session, email.message_id)
         old_application = session.get(Application, old_event.application_id) if old_event is not None else None
 
         scrutiny_result = scrutinize({"email": email})
         emails_scrutinized += 1
+        publish_node_event("audit_scrutinize_relevance", email.message_id)
 
         new_extracted = None
         platform_hint = None
         if scrutiny_result.get("scrutiny") == "pass":
             extract_result = classify_and_extract({"email": email})
             emails_extracted += 1
+            publish_node_event("audit_classify_and_extract", email.message_id)
             new_extracted = extract_result.get("extracted")
             platform_hint = extract_result.get("platform_hint")
             if new_extracted is not None:
@@ -106,11 +120,12 @@ def process_full_scan(
             platform_hint = guess_platform(email.sender, sources)
 
         # A pending suggestion for this email already exists - from an
-        # earlier full-scan run, or a crashed run that got this far before
+        # earlier full-audit run, or a crashed run that got this far before
         # failing (suggestions are committed per-email, not all-or-nothing).
         # Skip creating a duplicate rather than re-flagging the same thing
-        # every time a scan runs.
+        # every time an audit runs.
         already_pending = repo.has_pending_suggestion_for_message(session, email.message_id)
+        publish_node_event("compare_against_stored", email.message_id)
 
         if not already_pending and old_application is not None:
             if new_extracted is None:
@@ -124,6 +139,7 @@ def process_full_scan(
                     pipeline_run_id=run_id,
                 )
                 suggestions_created += 1
+                publish_node_event("queue_reclassify_irrelevant", email.message_id)
             elif _application_differs(old_application, old_event, new_extracted):
                 repo.create_review_suggestion(
                     session,
@@ -137,6 +153,9 @@ def process_full_scan(
                     pipeline_run_id=run_id,
                 )
                 suggestions_created += 1
+                publish_node_event("queue_update_existing", email.message_id)
+            else:
+                publish_node_event("no_suggestion", email.message_id)
         elif not already_pending and new_extracted is not None:
             match = repo.find_matching_application(
                 session, new_extracted.company_name, new_extracted.job_title
@@ -152,6 +171,9 @@ def process_full_scan(
                 pipeline_run_id=run_id,
             )
             suggestions_created += 1
+            publish_node_event("queue_update_existing" if match is not None else "queue_new_application", email.message_id)
+        else:
+            publish_node_event("no_suggestion", email.message_id)
 
         emails_written += 1
         repo.update_pipeline_run_progress(
@@ -168,15 +190,27 @@ def process_full_scan(
         "applications_created": 0,
         "events_created": 0,
         "suggestions_created": suggestions_created,
+        "cancelled": cancelled,
     }
 
 
-def full_scan(settings: Settings | None = None) -> dict:
+def full_audit(settings: Settings | None = None) -> dict:
     """Real end-to-end entrypoint: refetches every email ever seen (ignoring
     the processed_emails idempotency skip a normal sync relies on) from the
     actual Gmail API and re-runs today's pipeline against it, so
     pipeline/prompt improvements can be validated against the real
-    historical dataset. See process_full_scan for the testable core logic.
+    historical dataset. See process_full_audit for the testable core logic.
+
+    Named "audit", not "sync": unlike run_sync, this never writes to
+    Application/StatusEvent directly - every disagreement with what's
+    already stored becomes a ReviewSuggestion a human approves or rejects
+    (repo.create_review_suggestion below), since the scrutiny/extraction
+    LLM calls have a real, if rare, false-positive rate and running them
+    over the entire historical inbox at once is not a risk worth taking
+    silently. Calling this "sync" (as it was originally named, full_scan)
+    invited the reasonable but wrong assumption that it behaves like
+    run_sync at a larger scope - it doesn't; it's a read-only re-check that
+    queues proposed changes, never applies them.
     """
     settings = settings or get_settings()
     sources = get_sources()
@@ -184,14 +218,14 @@ def full_scan(settings: Settings | None = None) -> dict:
     init_db(settings.db_path)
     with Session(get_engine(settings.db_path)) as session:
         run_id = str(uuid.uuid4())
-        repo.create_pipeline_run(session, run_id, run_type="full_scan")
+        repo.create_pipeline_run(session, run_id, run_type="full_audit")
 
         model = get_chat_model(settings)
         client = GmailClient(settings)
         all_message_ids = [row.message_id for row in session.exec(select(ProcessedEmail)).all()]
         emails = client.fetch_messages_by_id(all_message_ids)
 
-        stats = process_full_scan(emails, model=model, session=session, sources=sources, run_id=run_id)
+        stats = process_full_audit(emails, model=model, session=session, sources=sources, run_id=run_id)
 
         repo.finish_pipeline_run(
             session,
@@ -201,5 +235,6 @@ def full_scan(settings: Settings | None = None) -> dict:
             applications_created=stats["applications_created"],
             events_created=stats["events_created"],
             suggestions_created=stats["suggestions_created"],
+            errors="cancelled_by_user" if stats["cancelled"] else None,
         )
         return {"run_id": run_id, **stats}

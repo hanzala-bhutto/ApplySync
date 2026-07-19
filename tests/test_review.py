@@ -10,7 +10,7 @@ def test_list_review_suggestions_empty_when_none_pending(client):
 
 
 def test_list_review_suggestions_returns_pending_only(client):
-    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_audit")
     repo.create_review_suggestion(
         client.db_session,
         message_id="msg-1",
@@ -39,7 +39,7 @@ def test_list_review_suggestions_returns_pending_only(client):
 
 
 def test_approve_review_suggestion_applies_change(client):
-    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_audit")
     suggestion = repo.create_review_suggestion(
         client.db_session,
         message_id="msg-1",
@@ -67,7 +67,7 @@ def test_reject_review_suggestion_leaves_data_untouched(client):
         applied_date=date(2026, 1, 1),
         current_status="applied",
     )
-    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_audit")
     suggestion = repo.create_review_suggestion(
         client.db_session,
         message_id="msg-1",
@@ -98,7 +98,7 @@ def test_reject_unknown_suggestion_returns_404(client):
 
 
 def test_reject_all_dismisses_every_pending_suggestion(client):
-    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(client.db_session, "run-1", run_type="full_audit")
     for message_id in ("msg-1", "msg-2"):
         repo.create_review_suggestion(
             client.db_session,
