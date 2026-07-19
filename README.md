@@ -44,12 +44,13 @@ What is actually working today:
   - `scrutinize_relevance`: a hybrid heuristic + cheap-LLM filter that rejects job-alert digests and recommendation emails before they ever reach the expensive extraction call, escalating to a larger model only for the rare genuinely ambiguous subject
   - `classify_and_extract`: one merged LLM call classifies relevance and extracts structured fields (company, job title, status, location, salary, URL), with one escalation-model retry if the fast call fails outright or returns no usable company name
   - `match_existing_application`: heuristic company/title/platform matching decides new vs. update vs. duplicate - normalized for case, whitespace, legal suffixes ("SE"/"GmbH"/"Inc"), and gender/diversity qualifiers ("(m/f/d)"), plus **fuzzy company-name matching** (typo and word-add tolerant, e.g. "EGYM" vs "EGYM SE" vs a one-character typo) that always routes through the disambiguation agent rather than auto-merging
-  - `disambiguate_match`: a hand-rolled LLM tool-calling agent (not a fixed graph node) for the genuinely ambiguous case - same company, no exact title match. It inspects a candidate's status history and source email, can check the company's real-world identity via web search, and must gather actual evidence before it's allowed to submit a merge verdict (a same-application/duplicate decision is rejected outright if the agent never looked at that candidate first) - fails open to a new (recoverable) row rather than ever risking a silent wrong merge
+  - `disambiguate_match`: a hand-rolled LLM tool-calling agent (not a fixed graph node) for the genuinely ambiguous case - same company, no exact title match. It inspects a candidate's status history and source email, can check the company's real-world identity via web search, and must gather actual evidence before it's allowed to submit a merge verdict (a same-application/duplicate decision is rejected outright if the agent never looked at that candidate first) - fails open to a new (recoverable) row rather than ever risking a silent wrong merge. Date comparisons between candidate emails are computed in Python and handed to the model as an explicit annotation ("5 days AFTER the new email"), not left to the model's own arithmetic - an LLM-as-judge audit found this was the single largest source of real disambiguation errors
   - `upsert_db`: deterministic persistence, no LLM involved
 - **Idempotent processing**: every email is tracked by Gmail message id so re-runs never reprocess or duplicate the same email; a run's incremental progress (emails scrutinized/extracted/written) is persisted as it happens, not just once the run finishes
 - **Status tracking across the full application lifecycle**: applied, viewed, assessment, interview, rejected, offer, declined (manual-only, for offers you turn down yourself), and other
 - **A React dashboard**: a status-board (Kanban) view with drag-and-drop status correction (keyboard-operable via `@dnd-kit`), inline field editing, a "reprocess from source email" action, per-application timelines with the original source email viewable inline, follow-up reminders, and a per-platform response-rate breakdown - all served by a FastAPI JSON API with a full OpenAPI schema
-- **Manual "Sync Now"** button and a dedicated `/sync` page with a staged progress view (ingestion/scrutiny/extraction/write) and recent-run history, plus the equivalent `applysync sync` CLI command
+- **Manual "Sync Now"** button and a dedicated `/sync` page with a staged progress view (ingestion/scrutiny/extraction/write), a live pipeline-flow graph that mirrors the actual LangGraph structure and animates node-by-node as a real sync runs (SSE-driven, diagnostic only), a Stop button for cancelling an in-progress run, and recent-run history, plus the equivalent `applysync sync` CLI command
+- **Full Audit**: re-runs today's extraction logic against every email ever seen (not just new ones) to catch drift from a prompt/model change; never writes directly, every disagreement becomes a reviewable suggestion on the `/review` page
 - **Best-effort platform attribution** for dashboard labeling (LinkedIn, Indeed, StepStone, SmartRecruiters, Personio, Ashby, and more), configured entirely in `backend/config/sources.yaml`
 - **Company research card**: an on-demand "research this company" action on the detail page that pulls a grounded profile (summary, industry, size, HQ, website, recent news) from live web results via the self-hosted SearXNG layer. Web-sourced and clearly labeled as such, kept strictly separate from email-extracted data, with source links for verification and a cached-and-shared profile per company
 - **Reliability tooling** (see `CLAUDE.md`'s M5 milestone for full detail): a hand-labeled eval harness (real emails, human-verified labels, per-stage accuracy metrics - scrutiny false-reject rate, classification accuracy, per-field extraction accuracy) that gates prompt/model changes before they ship, plus self-hosted Langfuse tracing every node and agent tool loop of a real sync for after-the-fact debugging, with a flagged-trace-to-eval-sample feedback loop
@@ -71,13 +72,13 @@ example data ("Acme Corp", "Globex"), not a real inbox. Regenerate with
 
 ![An application detail page showing the extracted fields, a status timeline, and a sky-blue company research card labeled 'from the web' with summary, industry, size, headquarters, website, and recent news](docs/screenshots/application-detail.png)
 
-**Sync** - a staged progress view (ingestion, scrutiny, extraction, classification/DB write) with a recent-run history and the Full Scan control:
+**Sync** - a live pipeline-flow graph animated node-by-node as the run progresses, a staged progress view (ingestion, scrutiny, extraction, classification/DB write), a Stop button, a recent-run history, and the Full Audit control:
 
 ![The Sync page showing staged progress bars for a finished run and a recent-runs table](docs/screenshots/sync.png)
 
-**Review** - full-scan runs never overwrite data; they queue suggestions here for approval, with a before/after diff for status changes:
+**Review** - Full Audit runs never overwrite data; they queue suggestions here for approval, with a before/after diff for status changes:
 
-![The Review page showing two full-scan suggestions, a new application and an update-existing with an applied-to-rejected status diff, each with Approve and Reject buttons](docs/screenshots/review.png)
+![The Review page showing two Full Audit suggestions, a new application and an update-existing with an applied-to-rejected status diff, each with Approve and Reject buttons](docs/screenshots/review.png)
 
 **Analytics** - response rate per platform:
 
@@ -174,7 +175,7 @@ All three `mark_*` nodes (`mark_scrutiny_rejected`, `mark_irrelevant`, `mark_ext
 
 `match_existing_application`'s `MatchDecision.action` (`new_application` vs. `update_existing` vs. `duplicate_skip`) branches *inside* `upsert_db` rather than as a graph-level conditional edge - deciding whether to insert a new `Application`, append a `StatusEvent` to an existing one, or write nothing, but not changing which node runs next.
 
-`full_scan.py` (used by the dashboard's "Full Scan" review flow) reuses `scrutinize_relevance` and `classify_and_extract` as plain Python functions with its own manual branching to produce `ReviewSuggestion` rows for human approval - it does not build or run a `StateGraph`, so it isn't part of this diagram.
+`full_audit.py` (used by the dashboard's "Full Audit" review flow, renamed from `full_scan.py` since it never writes directly - see the Roadmap) reuses `scrutinize_relevance` and `classify_and_extract` as plain Python functions with its own manual branching to produce `ReviewSuggestion` rows for human approval - it does not build or run a `StateGraph`, so it isn't part of this diagram.
 
 ### Mostly a workflow, with one narrow agentic exception
 
@@ -310,7 +311,8 @@ Both `applysync sync` and a dashboard-triggered sync fetch new application-relat
 - [x] Eval harness: a hand-labeled gold dataset with per-stage accuracy metrics (scrutiny, classification, extraction), gating prompt/model changes before they ship
 - [x] Tiered escalation model: a larger model handles rare ambiguous scrutiny/extraction calls and the low-volume disambiguation agent, verified against the eval baseline
 - [x] Self-hosted Langfuse observability: traces every node and agent tool loop of a real sync, with a flagged-trace-to-eval-sample feedback loop
-- [ ] Granular per-stage Langfuse score configs + LLM-as-judge evaluators (open PR, closes the loop further so mistakes get caught even when no human happens to look)
+- [x] Granular per-stage Langfuse score configs + LLM-as-judge evaluators, run for the first time against a real full-history sync: caught and fixed a real disambiguation-agent bug (date-chronology reasoning errors) this way
+- [x] Real-time pipeline flow visualization: a live graph on the Sync page mirroring the actual LangGraph structure, animated node-by-node via SSE as a real sync runs; a Stop button for cancelling an in-progress sync
 - [ ] Confidence-routed merges: agent verdicts below a confidence bar become review suggestions instead of applying silently
 
 Full milestone detail, including the reasoning behind each decision, lives in `CLAUDE.md`.
