@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -69,6 +71,11 @@ The NEW email being classified:
 Existing candidate applications at this company/platform:
 {candidates}
 {title_less_guidance}
+get_status_history and read_source_email annotate each date with its exact \
+day offset from the new email (e.g. "5 days AFTER the new email") - trust that \
+annotation over your own reading of the raw dates; do not restate or recompute \
+the chronology yourself, quote the annotation directly in your reasoning.
+
 Start with get_status_history and/or read_source_email for the candidate(s) \
 above - they answer the actual question (is this a status update for one of \
 them?) directly and immediately satisfy the evidence requirement below. Only \
@@ -153,6 +160,35 @@ def _truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+def _parse_email_date(date_header: str) -> datetime | None:
+    try:
+        return parsedate_to_datetime(date_header)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_aware_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _relative_to_new_email(other: datetime | None, new_email_date: datetime | None) -> str:
+    """Ten of eleven real judged failures in the disambiguation agent (see
+    docs/feasibility, the LLM-judge accuracy pass) traced to the SAME root
+    cause: the model doing mental date-arithmetic on two raw RFC-2822 strings
+    and getting the chronological order backwards (e.g. reading "13 Jul 2026"
+    vs "13 Jun 2026" as the same, or flipping which email came first). Rather
+    than trust the model's arithmetic, compute the actual day delta here in
+    Python - it cannot get this wrong - and hand it the answer directly."""
+    if other is None or new_email_date is None:
+        return ""
+    delta_days = (_as_aware_utc(other) - _as_aware_utc(new_email_date)).days
+    if delta_days == 0:
+        return " (same day as the new email)"
+    if delta_days > 0:
+        return f" ({delta_days} day{'s' if delta_days != 1 else ''} AFTER the new email)"
+    return f" ({-delta_days} day{'s' if delta_days != -1 else ''} BEFORE the new email)"
+
+
 def _format_candidates(candidates: list[Application]) -> str:
     lines = []
     for c in candidates:
@@ -185,6 +221,7 @@ def run_disambiguation(
     both.
     """
     candidate_by_id = {c.id: c for c in candidates}
+    new_email_date = _parse_email_date(current_email.date)
 
     # A same_application/duplicate verdict merges data into an existing row -
     # much harder to undo than an extra row - so it must be backed by the
@@ -206,7 +243,7 @@ def run_disambiguation(
         if not events:
             return "no status events recorded"
         return "\n".join(
-            f"{e.event_date}: {e.status}"
+            f"{e.event_date}{_relative_to_new_email(e.event_date, new_email_date)}: {e.status}"
             + (" (manual)" if e.source_email_id is None else "")
             + (f" - {e.notes}" if e.notes else "")
             for e in events
@@ -231,8 +268,9 @@ def run_disambiguation(
         except Exception as exc:  # noqa: BLE001 - degrade, don't crash the agent
             logger.warning("read_source_email fetch failed for %s: %s", source_id, exc)
             return f"could not fetch source email: {exc}"
+        relative = _relative_to_new_email(_parse_email_date(email.date), new_email_date)
         return (
-            f"From: {email.sender}\nSubject: {email.subject}\nDate: {email.date}\n"
+            f"From: {email.sender}\nSubject: {email.subject}\nDate: {email.date}{relative}\n"
             f"Body: {_truncate(email.body, _EMAIL_TRUNCATE)}"
         )
 

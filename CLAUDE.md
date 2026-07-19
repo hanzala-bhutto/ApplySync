@@ -766,6 +766,44 @@ merged into `Application`. Locked with the user, ordered by dependency:
       project's history (EGYM dedupe, pagination cap, lookback buffer), the
       reject/ambiguous edges only surface against real data, so do a live sync
       before fully trusting the agent's judgment on real ambiguous pairs.
+
+      **LLM-as-judge accuracy audit + date-arithmetic fix (2026-07-20,
+      `docs/feasibility/disambiguation-date-arithmetic.md`)**: the M5
+      LLM-judge evaluators (see M5 step 2 below) were run for the first time
+      in anger against a real full-history sync session (500 emails,
+      `backend/scripts/run_llm_judge_backfill.py` - written because the
+      self-hosted Langfuse build's Traces-table "Actions -> Evaluate" backfill
+      button, which the hosted docs describe, isn't present in this version;
+      the script gets the same result via the public API directly). Results:
+      relevance 99.5% (568/571), extraction 96.4% (511/530), disambiguation
+      79.5% (97/122) - the low disambiguation number turned out to be mostly
+      a **measurement bug, not an agent bug**: the `disambiguate_match`
+      observation's own input/output doesn't include what `get_status_history`/
+      `read_source_email` actually returned (sibling trace observations), so
+      the judge was scoring "hallucination" on reasoning it had no way to
+      verify. Feeding the judge the real tool-call evidence raised the honest
+      baseline to 91.0% (111/122). Of the 11 truly-flagged cases at that
+      baseline, 10 shared one root cause: the agent doing mental arithmetic on
+      two raw RFC-2822 date strings and getting the chronological order
+      backwards (e.g. concluding a rejection came before the application it
+      referred to). Fixed by computing the exact day delta in Python
+      (`_relative_to_new_email` in `disambiguate.py`) and annotating both
+      tools' returned dates with it inline (e.g. "5 days AFTER the new
+      email"), rather than asking the model to do the subtraction itself.
+      Verified live with `backend/scripts/replay_disambiguation.py` (replays
+      a historical observation through current code against real Gmail/DB
+      data, not mocks) against all 10 flagged cases: 5 flipped to the
+      judge-endorsed correct verdict, 3 kept their verdict but replaced
+      fabricated reasoning ("likely a typo in the year") with real computed
+      evidence, 2 remain open on a separate, smaller root cause
+      (which-of-several-candidates ambiguity, not date math) - not chased
+      further yet. Extraction's 19 flagged cases also surfaced two new
+      concrete, not-yet-fixed patterns worth a future pass: Indeed
+      confirmation emails wrongly returning `missing_required_fields` (6
+      cases) and the "similar jobs" recommendation-section guardrail not
+      holding for Stepstone's specific template (4 cases) - pulled into
+      `eval/samples/gold.json` as unverified samples via
+      `pull_flagged_traces.py` for the next accuracy pass.
 - [x] **Fuzzy/alias company matching** (agreed next-build item, now shipped).
       Closes the exact-string blind spot in `repo.find_matching_application`/
       `find_candidate_applications` that let real typo dupes ("EGYM" vs
