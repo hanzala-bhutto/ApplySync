@@ -857,8 +857,8 @@ merged into `Application`. Locked with the user, ordered by dependency:
       news, interview format for the role, common questions), cached in a new
       `InterviewDossier` table + endpoint + a detail-page card. Same
       grounded-parser pattern.
-- [ ] **Review-suggestion triage (full-scan).** Add a confidence step to
-      `pipeline/full_scan.py` that can search to verify a suggestion's
+- [ ] **Review-suggestion triage (full audit).** Add a confidence step to
+      `pipeline/full_audit.py` that can search to verify a suggestion's
       company/domain, auto-accept high-confidence ones, and surface only the
       genuinely ambiguous. New `confidence` field on `ReviewSuggestion`.
       Directly targets the false-positive-flood pain (the "528 suggestions"
@@ -1028,6 +1028,30 @@ merged into `Application`. Locked with the user, ordered by dependency:
       false-rejects 1.9% -> 0.0%, classification accuracy 79.8% -> 98.2%,
       status 92.9% -> 95.3%, company steady at 95.3% - every number measured,
       not estimated.
+- [x] **Real-time pipeline flow visualization and sync controls** (PR #89,
+      closes #86/#87/#88). Three pieces: (1) renamed `full_scan` to
+      `full_audit` throughout (module, functions, API endpoint, DB
+      `run_type` value, frontend labels, tests, with backward-compat display
+      handling for older stored rows) - "full-scan" read as a bigger version
+      of "sync," when it actually never writes to `Application`/`StatusEvent`
+      directly, every disagreement becomes a `ReviewSuggestion` a human
+      approves. (2) A live React Flow graph on the `/sync` page (two tabs,
+      Sync/Full Audit) mirroring the real LangGraph structure node-for-node,
+      color-coded by component type, with real-time node/edge highlight
+      animation driven by a new SSE stream and a diagnostic-only backend
+      pub/sub (never load-bearing - a disconnected client doesn't affect the
+      run). Found and fixed several real bugs verifying this live: a Chromium
+      dynamic-SMIL-animation quirk, React batching silently dropping a node's
+      highlight, multiple edges sharing a target node animating together
+      regardless of which branch an email actually took, a WCAG contrast
+      regression, and a layout bug hiding the last node below the fold. (3) A
+      **Stop button** for an in-progress sync - cooperative cancellation
+      checked between emails, `POST /api/sync/stop`, a "Stopped" vs "Failed"
+      display distinction. Found and fixed one real bug live: cancelling a
+      run partway through a large batch advanced the sync bookmark to the
+      cancelled run's own start time, permanently hiding every not-yet-
+      processed email from future syncs - `last_successful_run_started_at`
+      now excludes any run with `errors` set, not just unfinished ones.
 
 ## Feature workflow
 
