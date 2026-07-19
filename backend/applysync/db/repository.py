@@ -566,10 +566,26 @@ def last_successful_run_started_at(session: Session) -> datetime | None:
     every run. Uses started_at (not finished_at) of the last run to leave a
     small overlap rather than a gap; processed_emails already dedupes
     anything re-fetched in that overlap.
+
+    Excludes runs with errors set (`errors IS NOT NULL`), not just unfinished
+    ones - a real bug found live: a user-cancelled run (errors=
+    "cancelled_by_user", see run_control.py) still gets finished_at set so it
+    displays correctly as "Stopped" rather than stuck "in progress" forever,
+    but that's not the same as this run having actually gotten through
+    everything it fetched. Before this exclusion, stopping a run partway
+    through a large batch (e.g. 500 emails discovered, 20 processed before
+    stopping) advanced the bookmark to the cancelled run's own start time -
+    almost "now" - permanently hiding the other 480 from every future sync's
+    Gmail query, since they were now older than the new `after:` cutoff.
+    Excluding any run with errors means a cancelled (or, if this ever
+    changes, a failed-but-still-finished) run leaves the bookmark exactly
+    where it was before that attempt, so the next sync naturally re-fetches
+    the same batch - processed_emails skips the ones already done, and
+    picks up the rest right where it left off.
     """
     statement = (
         select(PipelineRun)
-        .where(PipelineRun.finished_at.is_not(None))
+        .where(PipelineRun.finished_at.is_not(None), PipelineRun.errors.is_(None))
         .order_by(PipelineRun.started_at.desc())
     )
     last_run = session.exec(statement).first()
@@ -644,7 +660,7 @@ def finish_pipeline_run(
 
 def find_application_by_source_email(session: Session, message_id: str) -> Application | None:
     """Whichever application a previously-processed email contributed a
-    status event to, if any - used by full_scan to determine prior context
+    status event to, if any - used by full_audit to determine prior context
     when re-examining an already-processed message. None means the email
     was never linked to a real application (it was irrelevant, rejected, or
     extraction failed) at the time it was originally processed.
@@ -658,7 +674,7 @@ def find_application_by_source_email(session: Session, message_id: str) -> Appli
 
 def find_status_event_by_source_email(session: Session, message_id: str) -> StatusEvent | None:
     """The specific status event a previously-processed email originally
-    created, if any. full_scan compares a fresh re-extraction against THIS
+    created, if any. full_audit compares a fresh re-extraction against THIS
     event's own status, not the application's current current_status -
     current_status reflects whatever the most recent event says, which for
     an application with more than one status transition (e.g. applied ->
@@ -671,8 +687,8 @@ def find_status_event_by_source_email(session: Session, message_id: str) -> Stat
 
 def has_pending_suggestion_for_message(session: Session, message_id: str) -> bool:
     """Guards against duplicate suggestions piling up across repeated
-    full-scan runs - without this, running a full scan more than once (or
-    a scan that partially completes before crashing, since suggestions are
+    full-audit runs - without this, running a full audit more than once (or
+    an audit that partially completes before crashing, since suggestions are
     committed per-email as the loop proceeds) re-flags the same email every
     time instead of recognizing it's already queued for review.
     """
@@ -723,7 +739,7 @@ def approve_review_suggestion(session: Session, suggestion_id: int) -> ReviewSug
     """Applies the suggested change to the real Application/StatusEvent
     tables (for new_application/update_existing), or simply marks the
     suggestion resolved with no data change (for reclassify_irrelevant -
-    automatically deleting real application data from a full scan is too
+    automatically deleting real application data from a full audit is too
     risky; the existing "delete application" action on the detail page is
     the manual follow-up if the user agrees it should go).
     """
@@ -796,7 +812,7 @@ def reject_review_suggestion(session: Session, suggestion_id: int) -> ReviewSugg
 
 def reject_all_pending_suggestions(session: Session) -> int:
     """Bulk dismiss, for clearing out a backlog in one action (e.g. after a
-    bug in an earlier full-scan run flooded the queue with false positives -
+    bug in an earlier full-audit run flooded the queue with false positives -
     rejecting doesn't touch any Application/StatusEvent data, it only
     resolves the suggestion rows themselves). Returns how many were
     rejected.

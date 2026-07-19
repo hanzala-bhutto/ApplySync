@@ -608,7 +608,7 @@ def test_find_status_event_by_source_email(session):
 
 
 def test_has_pending_suggestion_for_message(session):
-    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(session, "run-1", run_type="full_audit")
     assert repo.has_pending_suggestion_for_message(session, "msg-1") is False
 
     suggestion = repo.create_review_suggestion(
@@ -626,7 +626,7 @@ def test_has_pending_suggestion_for_message(session):
 
 
 def test_reject_all_pending_suggestions(session):
-    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(session, "run-1", run_type="full_audit")
     for message_id in ("msg-1", "msg-2", "msg-3"):
         repo.create_review_suggestion(
             session,
@@ -647,7 +647,7 @@ def test_reject_all_pending_suggestions(session):
 
 
 def test_create_and_list_pending_review_suggestions(session):
-    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(session, "run-1", run_type="full_audit")
     repo.create_review_suggestion(
         session,
         message_id="msg-1",
@@ -665,7 +665,7 @@ def test_create_and_list_pending_review_suggestions(session):
 
 
 def test_approve_new_application_suggestion_creates_application(session):
-    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(session, "run-1", run_type="full_audit")
     suggestion = repo.create_review_suggestion(
         session,
         message_id="msg-1",
@@ -694,7 +694,7 @@ def test_approve_update_existing_suggestion_adds_status_event(session):
         applied_date=date(2026, 1, 1),
         current_status="applied",
     )
-    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(session, "run-1", run_type="full_audit")
     suggestion = repo.create_review_suggestion(
         session,
         message_id="msg-1",
@@ -721,7 +721,7 @@ def test_reject_review_suggestion_leaves_data_untouched(session):
         applied_date=date(2026, 1, 1),
         current_status="applied",
     )
-    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(session, "run-1", run_type="full_audit")
     suggestion = repo.create_review_suggestion(
         session,
         message_id="msg-1",
@@ -749,7 +749,7 @@ def test_approve_reclassify_irrelevant_suggestion_makes_no_data_change(session):
         applied_date=date(2026, 1, 1),
         current_status="applied",
     )
-    repo.create_pipeline_run(session, "run-1", run_type="full_scan")
+    repo.create_pipeline_run(session, "run-1", run_type="full_audit")
     suggestion = repo.create_review_suggestion(
         session,
         message_id="msg-1",
@@ -765,3 +765,57 @@ def test_approve_reclassify_irrelevant_suggestion_makes_no_data_change(session):
     assert approved.status == "approved"
     session.refresh(application)
     assert application.current_status == "applied"
+
+def test_last_successful_run_started_at_excludes_cancelled_runs(session):
+    """Regression test for a real bug: a run cancelled partway through a
+    large batch still gets finished_at set (so it displays correctly as
+    "Stopped" rather than stuck "in progress" forever), but must NOT count
+    as the bookmark for the next sync's Gmail query - otherwise stopping a
+    500-email run after only 20 processed permanently hides the other 480
+    from every future sync, since the bookmark would jump to the cancelled
+    run's own (nearly "now") start time.
+    """
+    good_run = repo.create_pipeline_run(session, "run-good")
+    repo.finish_pipeline_run(
+        session, "run-good", emails_fetched=1, emails_relevant=1, applications_created=1, events_created=1
+    )
+
+    repo.create_pipeline_run(session, "run-cancelled")
+    repo.finish_pipeline_run(
+        session,
+        "run-cancelled",
+        emails_fetched=20,
+        emails_relevant=5,
+        applications_created=5,
+        events_created=5,
+        errors="cancelled_by_user",
+    )
+
+    result = repo.last_successful_run_started_at(session)
+
+    assert result == good_run.started_at
+
+
+def test_last_successful_run_started_at_excludes_failed_runs_that_still_finished(session):
+    """Same exclusion, generalized: ANY run with errors set is excluded, not
+    just the specific cancelled_by_user sentinel - a run that finished with
+    some other error string must not advance the bookmark either."""
+    good_run = repo.create_pipeline_run(session, "run-good")
+    repo.finish_pipeline_run(
+        session, "run-good", emails_fetched=1, emails_relevant=1, applications_created=1, events_created=1
+    )
+
+    repo.create_pipeline_run(session, "run-failed")
+    repo.finish_pipeline_run(
+        session,
+        "run-failed",
+        emails_fetched=1,
+        emails_relevant=1,
+        applications_created=1,
+        events_created=1,
+        errors="some other failure",
+    )
+
+    result = repo.last_successful_run_started_at(session)
+
+    assert result == good_run.started_at

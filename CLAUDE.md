@@ -649,6 +649,42 @@ subject to the no-backgrounding-dev-servers constraint the way the app's own
         pagination cap bug, the lookback-buffer bug) shows this class of
         bug only ever surfaces against a real inbox, never in unit tests
         alone. Do this before trusting the broadened filter on real data.
+- [x] **Full Audit** (shipped 2026-07-06 as `full_scan`, renamed 2026-07-19 -
+      see `docs/feasibility/full-audit-rename.md`; this entry was missing
+      from CLAUDE.md entirely until now, since it landed a week before the
+      `/feasibility` report workflow existed). Re-runs today's pipeline
+      against every email ever seen, not just new ones - lets a prompt/model
+      change be validated against the real historical inbox instead of only
+      new mail. `pipeline/full_audit.py`: `full_audit()` refetches every id
+      in `processed_emails` via `GmailClient.fetch_messages_by_id`, and
+      `process_full_audit()` reuses only the two side-effect-free node
+      factories, `scrutinize_relevance` and `classify_and_extract` (called
+      directly as plain functions, not through the compiled graph) - it
+      never touches `match_existing_application`, `disambiguate_match`, or
+      `upsert_db`. This is deliberate, not an oversight: those three nodes
+      auto-decide and auto-write, and running the full write-capable graph
+      over the *entire* historical inbox in one pass would let a rare LLM
+      false-positive silently corrupt real data at scale. Instead, every
+      disagreement between the fresh re-extraction and what's already
+      stored (`_application_differs`, comparing against the specific status
+      event the email originally created, not `application.current_status`
+      - see the fixed status-ordering bug above for why that distinction
+      matters) becomes a `ReviewSuggestion` row a human approves or rejects
+      on the `/review` page (`web/review.py`), never applied automatically.
+      `has_pending_suggestion_for_message` guards against re-flagging the
+      same email across repeated/crashed runs. Triggered from the `/sync`
+      page's "Run Full Audit" button (`POST /api/sync/full-audit`), gated
+      behind the same in-progress lock as a normal sync so the two can never
+      run concurrently. Two real bugs fixed after running against the real
+      inbox: a crash on manually-`declined` applications (that status is
+      excluded from the LLM-output schema on purpose - see the `declined`
+      status milestone above - but the diff snapshot was built through that
+      same schema, tripping a validation error the moment a real declined
+      application was re-audited), and a false-positive flood (528
+      suggestions from ~460 real emails) from comparing against
+      `application.current_status` instead of the specific email's own
+      original status event, which false-flagged every older email on any
+      application with more than one status transition.
 - [x] Web-research foundation: self-hosted SearXNG (see "Web search" section
       above) + `backend/applysync/search/client.py`. Live-verified against a
       real query.
@@ -703,7 +739,11 @@ merged into `Application`. Locked with the user, ordered by dependency:
       `read_source_email` which fetch+diffs a candidate's source email vs. the
       new one via `GmailClient.get_message`, `web_entity_check` over SearXNG)
       and loops until the model calls a terminal `submit_verdict` tool (bounded
-      by `MAX_AGENT_TURNS=6` for the 40 RPM cap). The verdict maps onto the
+      by `MAX_AGENT_TURNS=8` for the 40 RPM cap - raised from 6 after a real
+      full-history resync showed ~25% of ambiguous cases hitting the old
+      limit and failing open, largely from the model repeating
+      `web_entity_check` instead of using the cheaper, more directly relevant
+      `get_status_history`/`read_source_email` first). The verdict maps onto the
       existing `MatchDecision` (`same_application`->update_existing,
       `different_application`->new_application, `duplicate`->duplicate_skip) and
       its rationale is stored on the resulting status event's `notes` for

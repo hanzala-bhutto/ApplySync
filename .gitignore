@@ -15,6 +15,7 @@ token.json
 *.db-wal
 *.db-journal
 *.db.bak-*
+*.db.backup-*
 *.sqlite
 *.sqlite3
 

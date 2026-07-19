@@ -168,7 +168,7 @@ class GmailClient:
     def fetch_messages_by_id(self, message_ids: list[str]) -> list[RawEmail]:
         """Fetch each message's full body concurrently, given ids directly
         rather than a search query - used both by fetch_messages' own
-        pagination result and by full_scan (which re-fetches every
+        pagination result and by full_audit (which re-fetches every
         previously-processed message id, bypassing Gmail search entirely).
         10 workers is deliberately conservative: the LLM's 40rpm rate limit
         is the real bottleneck for a full sync, so faster fetching doesn't

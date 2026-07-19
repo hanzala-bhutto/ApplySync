@@ -9,6 +9,7 @@ from applysync.gmail.models import RawEmail
 from applysync.pipeline import graph as graph_module
 from applysync.pipeline.graph import process_emails
 from applysync.pipeline.state import ClassifyAndExtractResult
+from applysync.run_control import clear_cancel, request_cancel
 from tests.fakes import FakeExtractModel, FakeStructuredModel
 
 
@@ -312,3 +313,78 @@ def test_repeat_confirmation_emails_with_differing_legal_suffix_dedupe_to_one_ap
 
     assert stats["applications_created"] == 0
     assert stats["events_created"] == 1
+
+
+class _CancelDuringFirstCall:
+    """FakeStructuredModel-like stub whose first .invoke() call requests
+    cancellation as a side effect (simulating a stop request arriving while
+    the first email is mid-flight), so the test can verify the SECOND email
+    in the batch never gets processed, not just that the flag is checked."""
+
+    def __init__(self, result):
+        self._result = result
+        self.calls = 0
+
+    def invoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            request_cancel()
+        return self._result
+
+    def with_retry(self, **kwargs):
+        return self
+
+
+def test_process_emails_stops_before_the_next_email_once_cancel_is_requested(session):
+    """A stop request arriving mid-first-email must let that email finish
+    (checkpointing/idempotency assumes a graph run either completes or never
+    started - see run_control.py), then stop before starting the next one."""
+    clear_cancel()
+    try:
+        result = ClassifyAndExtractResult(
+            is_relevant=True, company_name="Acme", job_title="Engineer", status="applied"
+        )
+        model = FakeExtractModel(_CancelDuringFirstCall(result))
+
+        emails = [
+            _email(message_id="msg-1", subject="Thank you for your application"),
+            _email(message_id="msg-2", subject="Thank you for your application"),
+        ]
+        stats = _process_emails(emails, model=model, session=session, run_id="run-1")
+
+        assert stats["cancelled"] is True
+        assert stats["applications_created"] == 1
+        assert repo.is_processed(session, "msg-1")
+        assert not repo.is_processed(session, "msg-2")
+    finally:
+        clear_cancel()
+
+
+def test_process_emails_processes_nothing_when_already_cancelled_before_starting(session):
+    clear_cancel()
+    try:
+        request_cancel()
+        model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
+        stats = _process_emails(
+            [_email(message_id="msg-1", subject="Thank you for your application")],
+            model=model,
+            session=session,
+            run_id="run-1",
+        )
+
+        assert stats["cancelled"] is True
+        assert stats["applications_created"] == 0
+        assert not repo.is_processed(session, "msg-1")
+    finally:
+        clear_cancel()
+
+
+def test_process_emails_not_cancelled_reports_cancelled_false(session):
+    model = _model(is_relevant=True, company_name="Acme", job_title="Engineer", status="applied")
+    stats = _process_emails(
+        [_email(message_id="msg-1", subject="Thank you for your application")],
+        model=model,
+        session=session,
+        run_id="run-1",
+    )
+    assert stats["cancelled"] is False

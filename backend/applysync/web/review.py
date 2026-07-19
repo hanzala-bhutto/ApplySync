@@ -18,7 +18,7 @@ def register_review_routes(app, *, get_session) -> None:
     @router.get(
         "",
         response_model=list[ReviewSuggestion],
-        summary="List pending full-scan review suggestions",
+        summary="List pending full-audit review suggestions",
     )
     def list_review_suggestions(session: Session = Depends(get_session)):
         return repo.list_pending_review_suggestions(session)

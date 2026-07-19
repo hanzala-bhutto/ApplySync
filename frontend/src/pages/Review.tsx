@@ -116,7 +116,7 @@ export function Review() {
         <h1 className="text-xl font-bold tracking-tight">Review</h1>
         <div className="flex items-center gap-3">
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            {data.length} suggestion{data.length === 1 ? '' : 's'} from full-scan runs
+            {data.length} suggestion{data.length === 1 ? '' : 's'} from full-audit runs
           </span>
           {data.length > 0 && (
             <button

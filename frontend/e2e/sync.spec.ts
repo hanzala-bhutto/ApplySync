@@ -74,3 +74,50 @@ test('sync button shows an error toast when a sync fails', async ({ page }) => {
   // ("Gmail API unreachable") - matches every other mutation's error toast.
   await expect(page.getByText('Sync failed. Check the server terminal for details.')).toBeVisible()
 })
+
+test('sync button shows a Stop control while in progress, calls the stop endpoint, and toasts on cancellation', async ({ page }) => {
+  await mockApi(page)
+
+  let stopped = false
+  let stopping = false
+  await page.route('**/api/sync/stop', async (route) => {
+    stopped = true
+    stopping = true
+    await route.fulfill({ status: 200, json: { status: 'stopping' } })
+  })
+
+  let inProgress = true
+  await page.route('**/api/sync/status*', async (route) => {
+    await route.fulfill({
+      json: inProgress
+        ? { in_progress: true, last_error: null, stopping, latest_run: null }
+        : {
+            in_progress: false,
+            last_error: null,
+            stopping: false,
+            latest_run: {
+              id: 'run-1',
+              started_at: '2026-01-15T10:00:00Z',
+              finished_at: '2026-01-15T10:01:00Z',
+              emails_fetched: 2,
+              emails_relevant: 1,
+              applications_created: 0,
+              events_created: 0,
+              errors: 'cancelled_by_user',
+            },
+          },
+    })
+  })
+
+  await page.goto('/')
+  const stopButton = page.getByRole('button', { name: 'Stop' })
+  await expect(stopButton).toBeVisible()
+
+  await stopButton.click()
+  await expect.poll(() => stopped).toBe(true)
+  await expect(page.getByRole('button', { name: 'Stopping…' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Stopping…' })).toBeDisabled()
+
+  inProgress = false
+  await expect(page.getByText('Sync stopped.')).toBeVisible()
+})
