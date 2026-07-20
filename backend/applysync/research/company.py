@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 
+from applysync.pipeline.sanitize import INJECTION_GUARD, fence
 from applysync.search import SearchResult, SearxngClient, SearxngError
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,8 @@ use any prior knowledge, and do not invent facts. Fill each field from the \
 results; if the results genuinely do not mention something, use null for that \
 field only.
 
+{injection_guard}
+
 Company to profile: {company}
 
 Search results:
@@ -74,7 +77,7 @@ def _format_results(results: list[SearchResult]) -> str:
     lines = []
     for i, r in enumerate(results, start=1):
         lines.append(f"[{i}] {r.title}\n    url: {r.url}\n    {r.content}")
-    return "\n".join(lines)
+    return fence("\n".join(lines), "untrusted_search_results")
 
 
 def research_company(
@@ -108,6 +111,7 @@ def research_company(
         return CompanyProfileResult(), []
 
     prompt = _RESEARCH_PROMPT.format(
+        injection_guard=INJECTION_GUARD,
         company=display_name,
         results=_format_results(results),
         format_instructions=_PARSER.get_format_instructions(),

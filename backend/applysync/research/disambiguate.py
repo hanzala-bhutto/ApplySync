@@ -11,6 +11,7 @@ from applysync.db import repository as repo
 from applysync.db.models import Application
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.nodes import UNSPECIFIED_JOB_TITLE
+from applysync.pipeline.sanitize import INJECTION_GUARD, fence
 from applysync.pipeline.state import DisambiguationVerdict, JobApplicationEvent
 from applysync.search import SearxngError
 
@@ -59,14 +60,14 @@ platform already exists, but the job title does not match exactly (one may be \
 missing a title, or the titles may genuinely differ). Your job is to decide, \
 using the tools, then call submit_verdict.
 
-The NEW email being classified:
-  From: {sender}
-  Subject: {subject}
-  Date: {date}
+The NEW email being classified (pipeline-extracted values):
   Extracted company: {company}
   Extracted job title: {job_title}
-  Body (truncated):
-  {body}
+
+{injection_guard}
+
+The raw new email:
+{new_email_block}
 
 Existing candidate applications at this company/platform:
 {candidates}
@@ -269,9 +270,10 @@ def run_disambiguation(
             logger.warning("read_source_email fetch failed for %s: %s", source_id, exc)
             return f"could not fetch source email: {exc}"
         relative = _relative_to_new_email(_parse_email_date(email.date), new_email_date)
-        return (
+        return fence(
             f"From: {email.sender}\nSubject: {email.subject}\nDate: {email.date}{relative}\n"
-            f"Body: {_truncate(email.body, _EMAIL_TRUNCATE)}"
+            f"Body: {_truncate(email.body, _EMAIL_TRUNCATE)}",
+            "untrusted_email",
         )
 
     @tool
@@ -285,9 +287,12 @@ def run_disambiguation(
             return f"web search unavailable: {exc}"
         if not results:
             return "no results"
-        return "\n".join(
-            f"- {r.title}: {_truncate(r.content, _SEARCH_SNIPPET_TRUNCATE)} ({r.url})"
-            for r in results
+        return fence(
+            "\n".join(
+                f"- {r.title}: {_truncate(r.content, _SEARCH_SNIPPET_TRUNCATE)} ({r.url})"
+                for r in results
+            ),
+            "untrusted_search_results",
         )
 
     submitted: dict = {}
@@ -316,12 +321,16 @@ def run_disambiguation(
     messages = [
         SystemMessage(
             content=_SYSTEM_PROMPT.format(
-                sender=current_email.sender,
-                subject=current_email.subject,
-                date=current_email.date,
+                injection_guard=INJECTION_GUARD,
                 company=extracted.company_name,
                 job_title=extracted.job_title,
-                body=_truncate(current_email.body, _EMAIL_TRUNCATE),
+                new_email_block=fence(
+                    f"From: {current_email.sender}\n"
+                    f"Subject: {current_email.subject}\n"
+                    f"Date: {current_email.date}\n"
+                    f"Body (truncated):\n{_truncate(current_email.body, _EMAIL_TRUNCATE)}",
+                    "untrusted_email",
+                ),
                 candidates=_format_candidates(candidates),
                 title_less_guidance=_title_less_guidance(extracted, candidates),
             )

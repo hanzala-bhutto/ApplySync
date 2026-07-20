@@ -13,6 +13,7 @@ from applysync.config import SourcesConfig
 from applysync.db import repository as repo
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import guess_platform
+from applysync.pipeline.sanitize import INJECTION_GUARD, fence
 from applysync.pipeline.state import (
     ClassifyAndExtractResult,
     EmailState,
@@ -153,13 +154,11 @@ no concrete next stage stated - do not infer a positive or negative outcome from
 
 Also extract job_url, location, and salary_text if mentioned, else null.
 
+{injection_guard}
+
 Platform hint from the sender address (may be wrong or absent): {platform_hint}
 
-From: {sender}
-Subject: {subject}
-
-Body:
-{body}"""
+{email_block}"""
 
 
 # Strong negative markers seen in real job-alert/digest emails - these
@@ -227,11 +226,9 @@ _RELEVANCE_ONLY_PROMPT = """Is this email about a job application the user perso
 (a confirmation, status update, interview invite, rejection, or offer) - as opposed to a job \
 alert digest, newsletter, or job recommendation email?
 
-From: {sender}
-Subject: {subject}
+{injection_guard}
 
-Body (truncated):
-{body}"""
+{email_block}"""
 
 
 def make_scrutinize_relevance_node(model, sources: SourcesConfig, *, escalation_model=None):
@@ -258,8 +255,12 @@ def make_scrutinize_relevance_node(model, sources: SourcesConfig, *, escalation_
         if heuristic in ("pass", "reject"):
             return {"scrutiny": heuristic}
 
+        email_block = fence(
+            f"From: {email.sender}\nSubject: {email.subject}\n\nBody (truncated):\n{email.body[:1000]}",
+            "untrusted_email",
+        )
         prompt = _RELEVANCE_ONLY_PROMPT.format(
-            sender=email.sender, subject=email.subject, body=email.body[:1000]
+            injection_guard=INJECTION_GUARD, email_block=email_block
         )
         try:
             result = structured_model.invoke([HumanMessage(content=prompt)])
@@ -308,11 +309,14 @@ def make_classify_and_extract_node(model, sources: SourcesConfig, *, escalation_
     def classify_and_extract(state: EmailState) -> dict:
         email = state["email"]
         platform_hint = guess_platform(email.sender, sources)
+        email_block = fence(
+            f"From: {email.sender}\nSubject: {email.subject}\n\nBody:\n{email.body[:4000]}",
+            "untrusted_email",
+        )
         prompt = _CLASSIFY_AND_EXTRACT_PROMPT.format(
             platform_hint=platform_hint or "unknown",
-            sender=email.sender,
-            subject=email.subject,
-            body=email.body[:4000],
+            injection_guard=INJECTION_GUARD,
+            email_block=email_block,
         )
 
         result = _invoke(structured_model, prompt, email.message_id)
