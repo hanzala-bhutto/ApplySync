@@ -79,7 +79,9 @@ def _seed_application(session, *, company="Nagarro", title="Engineer", platform=
     return app
 
 
-def _verdict_call(decision, matched_application_id, reasoning="because", call_id="c1"):
+def _verdict_call(
+    decision, matched_application_id, reasoning="because", call_id="c1", confidence="high"
+):
     return FakeAIResponse(
         tool_calls=[
             {
@@ -88,6 +90,7 @@ def _verdict_call(decision, matched_application_id, reasoning="because", call_id
                     "decision": decision,
                     "matched_application_id": matched_application_id,
                     "reasoning": reasoning,
+                    "confidence": confidence,
                 },
                 "id": call_id,
             }
@@ -293,7 +296,7 @@ def test_hallucinated_id_raises_in_build_verdict(session):
     app = _seed_application(session)
 
     with pytest.raises(DisambiguationError):
-        _build_verdict("same_application", 999, "because", {app.id: app})
+        _build_verdict("same_application", 999, "because", "high", {app.id: app})
 
 
 def test_submit_verdict_rejected_without_evidence_for_that_id(session):
@@ -461,6 +464,69 @@ def test_ambiguous_email_duplicate_writes_nothing(session):
     events = [e for e in session.exec(select(StatusEvent)).all() if e.application_id == app.id]
     assert len(events) == 1  # only the seed event
     assert repo.is_processed(session, "msg-2") is True  # idempotency intact
+
+
+def test_low_confidence_same_application_routes_to_review_not_silent_merge(session):
+    """M5 confidence-routed merges: a same_application verdict below the
+    auto-merge bar must NOT merge into the candidate silently. Instead the email
+    is written as a new application (recoverable) and a merge_into
+    ReviewSuggestion is queued for a human to confirm.
+    """
+    app = _seed_application(session)
+    model = _extract_model(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": app.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", app.id, reasoning="probably the same", confidence="low"),
+        ]
+    )
+
+    stats = _run_ambiguous(session, model)
+
+    # New row created, candidate NOT updated with a new event.
+    assert stats["applications_created"] == 1
+    candidate_events = [
+        e for e in session.exec(select(StatusEvent)).all() if e.application_id == app.id
+    ]
+    assert len(candidate_events) == 1  # only the seed event; no silent merge
+
+    # A merge_into suggestion is queued against the candidate.
+    pending = repo.list_pending_review_suggestions(session)
+    assert len(pending) == 1
+    suggestion = pending[0]
+    assert suggestion.action == "merge_into"
+    assert suggestion.application_id == app.id
+    assert suggestion.confidence == "low"
+    assert suggestion.message_id == "msg-2"
+
+
+def test_high_confidence_same_application_auto_merges_no_suggestion(session):
+    """The other side of the bar: a high-confidence merge still applies directly
+    and queues nothing for review."""
+    app = _seed_application(session)
+    model = _extract_model(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": app.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", app.id, confidence="high"),
+        ]
+    )
+
+    stats = _run_ambiguous(session, model)
+
+    assert stats["applications_created"] == 0
+    assert stats["events_created"] == 1
+    assert repo.list_pending_review_suggestions(session) == []
+
+
+def test_low_confidence_verdict_normalizes_unknown_confidence_to_low(session):
+    """The model occasionally returns a stray confidence string; _build_verdict
+    normalizes anything unrecognized to low (safest: routes to review)."""
+    app = _seed_application(session)
+    verdict = _build_verdict("same_application", app.id, "because", "pretty sure", {app.id: app})
+    assert verdict.confidence == "low"
 
 
 def test_ambiguous_email_fails_open_to_new_application_on_agent_crash(session):

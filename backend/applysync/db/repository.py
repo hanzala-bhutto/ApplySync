@@ -658,6 +658,58 @@ def finish_pipeline_run(
     return run
 
 
+def merge_applications(
+    session: Session, *, source_ids: list[int], target_id: int
+) -> Application | None:
+    """Collapse one or more source applications into target_id: reassign every
+    source's status events to the target, recompute the target's applied_date
+    (earliest across the group) and current_status (latest status event across
+    the merged set), then delete the now-empty sources. Returns the target, or
+    None if it no longer exists.
+
+    All sources are deleted BEFORE the target's applied_date is updated, so
+    setting it to the group's earliest can never collide with a not-yet-deleted
+    source that already holds the target's (company, title, platform,
+    applied_date) UNIQUE tuple. Shared by the confidence-routed-merge approval
+    path (a single source) and the duplicate-cleanup script (a whole group).
+    """
+    target = session.get(Application, target_id)
+    if target is None:
+        return None
+    sources = [
+        app
+        for sid in source_ids
+        if sid != target_id and (app := session.get(Application, sid)) is not None
+    ]
+    if not sources:
+        return target
+
+    earliest_applied = min([target.applied_date] + [s.applied_date for s in sources])
+    for source in sources:
+        for event in session.exec(
+            select(StatusEvent).where(StatusEvent.application_id == source.id)
+        ).all():
+            event.application_id = target_id
+            session.add(event)
+    session.flush()  # persist the event reassignment before deleting the parents
+    for source in sources:
+        session.delete(source)
+    session.flush()  # sources gone, so the target can safely take their tuple
+
+    all_events = session.exec(
+        select(StatusEvent).where(StatusEvent.application_id == target_id)
+    ).all()
+    latest = max(all_events, key=lambda e: e.event_date) if all_events else None
+    target.applied_date = earliest_applied
+    if latest is not None:
+        target.current_status = latest.status
+    target.updated_at = _utcnow()
+    session.add(target)
+    session.commit()
+    session.refresh(target)
+    return target
+
+
 def find_application_by_source_email(session: Session, message_id: str) -> Application | None:
     """Whichever application a previously-processed email contributed a
     status event to, if any - used by full_audit to determine prior context
@@ -709,6 +761,7 @@ def create_review_suggestion(
     application_id: int | None = None,
     previous_extract_json: str | None = None,
     suggested_extract_json: str | None = None,
+    confidence: str | None = None,
 ) -> ReviewSuggestion:
     suggestion = ReviewSuggestion(
         message_id=message_id,
@@ -718,6 +771,7 @@ def create_review_suggestion(
         suggested_classification=suggested_classification,
         previous_extract_json=previous_extract_json,
         suggested_extract_json=suggested_extract_json,
+        confidence=confidence,
         pipeline_run_id=pipeline_run_id,
     )
     session.add(suggestion)
@@ -737,11 +791,12 @@ def list_pending_review_suggestions(session: Session) -> list[ReviewSuggestion]:
 
 def approve_review_suggestion(session: Session, suggestion_id: int) -> ReviewSuggestion:
     """Applies the suggested change to the real Application/StatusEvent
-    tables (for new_application/update_existing), or simply marks the
-    suggestion resolved with no data change (for reclassify_irrelevant -
-    automatically deleting real application data from a full audit is too
-    risky; the existing "delete application" action on the detail page is
-    the manual follow-up if the user agrees it should go).
+    tables (for new_application/update_existing), collapses the auto-created
+    new row into the candidate (for merge_into, the confidence-routed merge),
+    or simply marks the suggestion resolved with no data change (for
+    reclassify_irrelevant - automatically deleting real application data from a
+    full audit is too risky; the existing "delete application" action on the
+    detail page is the manual follow-up if the user agrees it should go).
     """
     suggestion = session.get(ReviewSuggestion, suggestion_id)
     if suggestion is None:
@@ -749,7 +804,22 @@ def approve_review_suggestion(session: Session, suggestion_id: int) -> ReviewSug
     if suggestion.status != "pending":
         return suggestion
 
-    if suggestion.action in ("new_application", "update_existing") and suggestion.suggested_extract_json:
+    if suggestion.action == "merge_into":
+        # The pipeline already auto-created a new application for this email
+        # (the recoverable choice). Approving means "yes, it IS the candidate":
+        # collapse that new row into the candidate (suggestion.application_id).
+        # The new row is found via the email that created it; if it's already
+        # gone (a prior merge, a manual delete), there's nothing to collapse.
+        new_app = find_application_by_source_email(session, suggestion.message_id)
+        if (
+            new_app is not None
+            and suggestion.application_id is not None
+            and new_app.id != suggestion.application_id
+        ):
+            merge_applications(
+                session, source_ids=[new_app.id], target_id=suggestion.application_id
+            )
+    elif suggestion.action in ("new_application", "update_existing") and suggestion.suggested_extract_json:
         extracted = json.loads(suggestion.suggested_extract_json)
         event_date = _utcnow()
         if suggestion.action == "new_application":

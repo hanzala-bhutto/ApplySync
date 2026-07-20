@@ -204,12 +204,13 @@ export interface ReviewSuggestion {
   id: number
   message_id: string
   application_id: number | null
-  action: 'new_application' | 'update_existing' | 'reclassify_irrelevant'
+  action: 'new_application' | 'update_existing' | 'reclassify_irrelevant' | 'merge_into'
   previous_classification: string
   suggested_classification: string
   previous_extract_json: string | null
   suggested_extract_json: string | null
   status: 'pending' | 'approved' | 'rejected'
+  confidence: string | null
   pipeline_run_id: string
   created_at: string
   reviewed_at: string | null

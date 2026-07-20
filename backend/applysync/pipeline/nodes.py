@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -9,7 +10,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage
 from sqlmodel import Session
 
-from applysync.config import SourcesConfig
+from applysync.config import SourcesConfig, get_settings
 from applysync.db import repository as repo
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import guess_platform
@@ -389,8 +390,29 @@ def make_match_node(session: Session):
     return match_existing_application
 
 
+# Confidence levels the agent can return, ordered so a numeric compare decides
+# whether a merge verdict clears the auto-apply bar (see disambiguate_match).
+_CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def _merge_below_bar(confidence: str, min_confidence: str) -> bool:
+    """True when a same_application/duplicate verdict at `confidence` is below
+    the configured auto-merge bar, so it must be routed to human review instead
+    of applied silently. Unknown values sort as low (safest: route to review).
+    """
+    have = _CONFIDENCE_ORDER.get((confidence or "low").lower(), 0)
+    need = _CONFIDENCE_ORDER.get((min_confidence or "medium").lower(), 1)
+    return have < need
+
+
 def make_disambiguate_node(
-    session: Session, *, model, gmail_client, search_client, escalation_model=None
+    session: Session,
+    *,
+    model,
+    gmail_client,
+    search_client,
+    escalation_model=None,
+    min_auto_merge_confidence: str | None = None,
 ):
     """LLM tool-loop agent for the ambiguous match case (see
     research/disambiguate.py). Fails OPEN to a new application on any agent
@@ -403,10 +425,17 @@ def make_disambiguate_node(
     genuinely ambiguous match cases, ~50 calls per full sync vs. 500), so there's
     no fast-path cost to always giving it the more careful model. Falls back to
     model when no escalation model is configured.
+
+    min_auto_merge_confidence gates when a same_application/duplicate verdict is
+    applied directly vs. routed to human review (M5 confidence-routed merges).
+    Defaults to settings.disambiguation_min_auto_merge_confidence; a verdict
+    below it is written as a NEW application and a merge ReviewSuggestion is
+    queued instead of merging silently.
     """
     from applysync.research.disambiguate import DisambiguationError, run_disambiguation
 
     llm = escalation_model or model
+    min_confidence = min_auto_merge_confidence or get_settings().disambiguation_min_auto_merge_confidence
 
     def disambiguate_match(state: EmailState) -> dict:
         extracted = state["extracted"]
@@ -436,6 +465,28 @@ def make_disambiguate_node(
         except Exception:  # noqa: BLE001 - any agent/transport failure fails open
             logger.exception("Disambiguation agent crashed, defaulting to new application")
             return {"match": MatchDecision(action="new_application")}
+
+        is_merge = (
+            verdict.decision in ("same_application", "duplicate")
+            and verdict.matched_application_id
+        )
+        # A low-confidence merge is unrecoverable if wrong, so it is not applied
+        # silently: write the email as a NEW application (recoverable, the same
+        # choice the agent's own error path makes) and hand upsert_db the
+        # candidate id so it queues a "merge into this?" ReviewSuggestion for a
+        # human. Only merges clearing the bar auto-apply.
+        if is_merge and _merge_below_bar(verdict.confidence, min_confidence):
+            logger.info(
+                "Disambiguation verdict %s (confidence=%s) below auto-merge bar %s, "
+                "routing to review as a new application",
+                verdict.decision, verdict.confidence, min_confidence,
+            )
+            return {
+                "match": MatchDecision(action="new_application"),
+                "review_merge_candidate_id": verdict.matched_application_id,
+                "disambiguation_confidence": verdict.confidence,
+                "disambiguation_reasoning": verdict.reasoning,
+            }
 
         if verdict.decision == "same_application" and verdict.matched_application_id:
             match = MatchDecision(
@@ -488,6 +539,36 @@ def make_upsert_node(session: Session, *, run_id: str):
                 raw_extract_json=extracted.model_dump_json(),
                 notes=notes,
             )
+            # Confidence-routed merge: the agent thought this matched an existing
+            # application but wasn't sure enough to merge automatically. The new
+            # row above keeps the email tracked (recoverable); queue a suggestion
+            # so a human can confirm collapsing it into the candidate (see
+            # repo.approve_review_suggestion's merge_into path).
+            candidate_id = state.get("review_merge_candidate_id")
+            if candidate_id is not None:
+                candidate = repo.get_application(session, candidate_id)
+                if candidate is not None:
+                    repo.create_review_suggestion(
+                        session,
+                        message_id=email.message_id,
+                        action="merge_into",
+                        application_id=candidate.id,
+                        previous_classification="relevant",
+                        suggested_classification="relevant",
+                        previous_extract_json=json.dumps(
+                            {
+                                "company_name": candidate.company_name,
+                                "job_title": candidate.job_title,
+                                "status": candidate.current_status,
+                                "platform": candidate.platform,
+                            }
+                        ),
+                        suggested_extract_json=json.dumps(
+                            {**extracted.model_dump(), "platform": platform}
+                        ),
+                        confidence=state.get("disambiguation_confidence"),
+                        pipeline_run_id=run_id,
+                    )
         elif match.action == "update_existing":
             repo.add_status_event(
                 session,

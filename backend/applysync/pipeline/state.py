@@ -90,6 +90,14 @@ class DisambiguationVerdict(BaseModel):
         description="One or two sentences explaining the decision, stored so a human "
         "can see why the pipeline deduped or split these applications."
     )
+    confidence: Literal["high", "medium", "low"] = Field(
+        default="medium",
+        description="How sure the agent is of a same_application/duplicate merge. "
+        "high: direct evidence from status history or the source email. medium: "
+        "strong but partly inferred. low: mostly inference. A merge below the "
+        "configured bar is not applied silently - it is queued for human review "
+        "(see disambiguate_match). Ignored for different_application.",
+    )
 
 
 class RelevanceOnlyResult(BaseModel):
@@ -127,4 +135,12 @@ class EmailState(TypedDict, total=False):
     # stored on the resulting status event's notes so a human can see why the
     # pipeline deduped or split the applications.
     disambiguation_reasoning: str | None
+    # Set only when the agent returned a same_application/duplicate verdict whose
+    # confidence was below the auto-merge bar: the email is written as a NEW
+    # application (recoverable), and upsert_db queues a "merge into this
+    # candidate?" ReviewSuggestion instead of merging silently. Holds the
+    # existing candidate id X the agent thought this matched, plus the
+    # confidence level, for the suggestion.
+    review_merge_candidate_id: int | None
+    disambiguation_confidence: str | None
     error: str | None

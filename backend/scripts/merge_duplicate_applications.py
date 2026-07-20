@@ -134,27 +134,12 @@ def merge_group(session: Session, group: list[Application], *, apply: bool) -> d
     }
 
     if apply:
-        # Reassign the duplicates' events to the canonical row, then DELETE the
-        # duplicates BEFORE touching the canonical's identity columns. Setting
-        # the canonical's applied_date to the group's earliest can otherwise
-        # collide with a not-yet-deleted duplicate that already holds that exact
-        # (company, title, platform, applied_date) tuple - the UNIQUE constraint.
-        for dupe in dupes:
-            for event in session.exec(
-                select(StatusEvent).where(StatusEvent.application_id == dupe.id)
-            ).all():
-                event.application_id = canonical.id
-                session.add(event)
-        session.flush()  # persist the event reassignment before deleting parents
-        for dupe in dupes:
-            session.delete(dupe)
-        session.flush()  # dupes gone, so the canonical can safely take their tuple
-        canonical.applied_date = earliest_applied
-        if latest is not None:
-            canonical.current_status = latest.status
-        canonical.updated_at = repo._utcnow()
-        session.add(canonical)
-        session.commit()
+        # Reassign the duplicates' events to the canonical row, recompute its
+        # applied_date/current_status, and delete the duplicates - all handled
+        # (with the delete-before-update ordering that avoids the UNIQUE-tuple
+        # collision) by the same helper the confidence-routed-merge approval
+        # path uses, so there's one merge implementation, not two.
+        repo.merge_applications(session, source_ids=[d.id for d in dupes], target_id=canonical.id)
 
     return plan
 

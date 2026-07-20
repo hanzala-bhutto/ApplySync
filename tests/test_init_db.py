@@ -6,7 +6,7 @@ from sqlmodel import select
 
 from applysync.db import repository as repo
 from applysync.db.init_db import get_engine, get_session, init_db
-from applysync.db.models import Application, PipelineRun
+from applysync.db.models import Application, PipelineRun, ReviewSuggestion
 
 
 def test_init_db_creates_usable_tables(tmp_path: Path):
@@ -97,3 +97,51 @@ def test_init_db_migrates_existing_database_missing_progress_columns(tmp_path: P
         assert old_run.emails_total is None
         assert old_run.run_type == "incremental"
         assert old_run.suggestions_created == 0
+
+
+def test_init_db_migrates_existing_review_suggestion_missing_confidence(tmp_path: Path):
+    """A pre-existing reviewsuggestion table (created before the confidence-
+    routed-merge feature) is missing the confidence column: init_db must add
+    it via ALTER TABLE without losing existing suggestion rows.
+    """
+    db_path = tmp_path / "pre_existing.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE reviewsuggestion (
+            id INTEGER NOT NULL PRIMARY KEY,
+            message_id VARCHAR NOT NULL,
+            application_id INTEGER,
+            action VARCHAR NOT NULL,
+            previous_classification VARCHAR NOT NULL,
+            suggested_classification VARCHAR NOT NULL,
+            previous_extract_json VARCHAR,
+            suggested_extract_json VARCHAR,
+            status VARCHAR NOT NULL,
+            pipeline_run_id VARCHAR NOT NULL,
+            created_at DATETIME NOT NULL,
+            reviewed_at DATETIME
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO reviewsuggestion (id, message_id, action, previous_classification, "
+        "suggested_classification, status, pipeline_run_id, created_at) VALUES "
+        "(1, 'old-msg', 'new_application', 'irrelevant', 'relevant', 'pending', 'old-run', "
+        "'2026-01-01 00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db_path)
+
+    from sqlalchemy import inspect
+
+    columns = {col["name"] for col in inspect(get_engine(db_path)).get_columns(ReviewSuggestion.__tablename__)}
+    assert "confidence" in columns
+
+    with get_session(db_path) as session:
+        old = session.get(ReviewSuggestion, 1)
+        assert old is not None
+        assert old.message_id == "old-msg"
+        assert old.confidence is None

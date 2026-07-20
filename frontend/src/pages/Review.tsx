@@ -33,9 +33,26 @@ function actionLabel(action: ReviewSuggestion['action']): string {
       return 'Update existing application'
     case 'reclassify_irrelevant':
       return 'No longer looks relevant'
+    case 'merge_into':
+      return 'Possible duplicate'
     default:
       return action
   }
+}
+
+function ConfidenceBadge({ confidence }: { confidence: string | null }) {
+  if (!confidence) return null
+  const styles: Record<string, string> = {
+    low: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
+    medium: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+    high: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  }
+  const cls = styles[confidence.toLowerCase()] ?? 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {confidence} confidence
+    </span>
+  )
 }
 
 function DiffRow({ label, before, after }: { label: string; before?: string | null; after?: string | null }) {
@@ -116,7 +133,7 @@ export function Review() {
         <h1 className="text-xl font-bold tracking-tight">Review</h1>
         <div className="flex items-center gap-3">
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            {data.length} suggestion{data.length === 1 ? '' : 's'} from full-audit runs
+            {data.length} pending suggestion{data.length === 1 ? '' : 's'}
           </span>
           {data.length > 0 && (
             <button
@@ -146,13 +163,24 @@ export function Review() {
                 key={suggestion.id}
                 className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"
               >
-                <div className="mb-3 flex items-baseline justify-between">
-                  <span className="text-sm font-semibold">{actionLabel(suggestion.action)}</span>
+                <div className="mb-3 flex items-baseline justify-between gap-3">
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm font-semibold">{actionLabel(suggestion.action)}</span>
+                    <ConfidenceBadge confidence={suggestion.confidence} />
+                  </span>
                   <span className="text-xs text-slate-500 dark:text-slate-400">
                     {new Date(suggestion.created_at).toLocaleString()}
                   </span>
                 </div>
                 <div className="mb-4 space-y-1.5">
+                  {suggestion.action === 'merge_into' && (
+                    <p className="mb-2 text-sm text-slate-500 dark:text-slate-400">
+                      This email was tracked as a new application, but the pipeline suspects (with the
+                      confidence shown) it is the same as an existing one. Approve to merge them into a
+                      single application; reject to keep both. Values below are the existing application
+                      (struck through) versus this email.
+                    </p>
+                  )}
                   <DiffRow label="Company" before={before?.company_name} after={after?.company_name} />
                   <DiffRow label="Job title" before={before?.job_title} after={after?.job_title} />
                   <DiffRow label="Status" before={before?.status} after={after?.status} />
