@@ -1,0 +1,4 @@
+# Shell scripts and git hooks must stay LF: a CRLF shebang line breaks `sh`
+# (it tries to exec "/bin/sh\r"). Force LF regardless of the checkout platform.
+*.sh text eol=lf
+scripts/hooks/* text eol=lf

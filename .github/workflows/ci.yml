@@ -1,0 +1,50 @@
+name: CI
+
+# Deterministic plane only: everything here runs WITHOUT the PII gold dataset
+# (eval/samples/*.json is gitignored) and WITHOUT the live NVIDIA model - tests
+# mock the LLM, Playwright mocks /api/*. The eval gate that needs real data and
+# the real model runs locally as a pre-push hook (scripts/hooks/pre-push), never
+# in this cloud runner. See docs/feasibility/llmops-pipeline.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e ".[dev,observability]"
+      - name: Lint
+        run: ruff check backend/applysync eval tests
+      - name: Tests
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: E2E
+        run: npm run test:e2e

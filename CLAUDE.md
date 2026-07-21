@@ -1002,6 +1002,32 @@ merged into `Application`. Locked with the user, ordered by dependency:
          by every `ChatNVIDIA` instance. Directly validates the Langfuse
          investment: this class of latency bug was invisible before
          per-call tracing existed.
+      6. [x] LLMOps automation (`docs/feasibility/llmops-pipeline.md`): the
+         reliability pieces (eval harness, Langfuse, judge backfill, flagged-
+         trace pull) existed but ran only when a human remembered to. This
+         wires them into an enforced, **two-plane** setup, because the gold
+         dataset is PII (gitignored) and the eval hits the live rate-limited
+         model, so the eval CANNOT run in cloud CI:
+
+         | Check | Plane | PII/live model? |
+         | --- | --- | --- |
+         | pytest + lint + frontend build/E2E | GitHub Actions (`.github/workflows/ci.yml`) | no (LLM + `/api/*` mocked) |
+         | prompt/schema-drift guard (`tests/test_schema_drift.py`, locks the classifier status `Literal`) | GitHub Actions | no |
+         | eval gate (`eval/run_eval.py --strict`) | local | yes |
+         | pre-push enforcement (`scripts/hooks/pre-push`, `scripts/install-hooks.sh` sets `core.hooksPath`) | local git hook | yes |
+         | quality-over-time ledger (`--ledger` -> `eval/baseline.json`) | local, committed | no (aggregate only) |
+
+         The pre-push hook diffs the pushed range for prompt/model-affecting
+         paths (`pipeline/nodes.py`, `pipeline/state.py`, `sources.yaml`,
+         `config.py`, `research/`) and only then runs `--strict`; bypass with
+         `git push --no-verify`. `eval/baseline.json` is the ONE eval artifact
+         allowed on the public repo and is **aggregate-only** by construction
+         (`report_to_ledger` emits numbers/date/sha/model, never a message ID,
+         email body, or company name - a leak check guards this). CI lint is
+         scoped to `backend/applysync eval tests` (the ad-hoc `backend/scripts/`
+         carry intentional `sys.path`-setup E402s). Competency scorecard table
+         (what this project exercises as an AI-engineering discipline) lives in
+         README's `## LLMOps` section, kept there rather than duplicated here.
 
 - [x] **Status-ordering and job-title extraction fixes** (issue/PR #67,
       found by this project's first full historical resync - hundreds of
