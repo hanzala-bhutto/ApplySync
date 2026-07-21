@@ -7,7 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from applysync.config import get_settings
 from applysync.db import models  # noqa: F401  (registers tables with SQLModel metadata)
-from applysync.db.models import PipelineRun
+from applysync.db.models import PipelineRun, ReviewSuggestion
 
 
 def get_engine(db_path: Path | None = None):
@@ -29,22 +29,28 @@ _PIPELINE_RUN_ADDITIVE_COLUMNS = {
     "suggestions_created": "INTEGER NOT NULL DEFAULT 0",
 }
 
+_REVIEW_SUGGESTION_ADDITIVE_COLUMNS = {
+    "confidence": "VARCHAR",
+}
 
-def _migrate_pipeline_run_columns(engine) -> None:
+
+def _migrate_additive_columns(engine, table_model, columns: dict[str, str]) -> None:
     """SQLite supports ALTER TABLE ... ADD COLUMN for simple additions.
     create_all() only creates missing tables, never alters existing ones -
     this closes that gap for an existing local applysync.db so a schema
     change never requires deleting real data. No-op on a brand-new DB
-    (already has the full schema) and no-op once columns exist.
+    (already has the full schema) and no-op once columns exist. Keep each
+    ADDITIVE_COLUMNS map in sync with new nullable/defaulted fields on the
+    corresponding model.
     """
     inspector = inspect(engine)
-    if PipelineRun.__tablename__ not in inspector.get_table_names():
+    if table_model.__tablename__ not in inspector.get_table_names():
         return  # brand-new DB, create_all() above already made the full table
 
-    existing_columns = {col["name"] for col in inspector.get_columns(PipelineRun.__tablename__)}
+    existing_columns = {col["name"] for col in inspector.get_columns(table_model.__tablename__)}
     missing = {
         name: ddl_type
-        for name, ddl_type in _PIPELINE_RUN_ADDITIVE_COLUMNS.items()
+        for name, ddl_type in columns.items()
         if name not in existing_columns
     }
     if not missing:
@@ -52,13 +58,16 @@ def _migrate_pipeline_run_columns(engine) -> None:
 
     with engine.begin() as connection:
         for name, ddl_type in missing.items():
-            connection.execute(text(f"ALTER TABLE {PipelineRun.__tablename__} ADD COLUMN {name} {ddl_type}"))
+            connection.execute(
+                text(f"ALTER TABLE {table_model.__tablename__} ADD COLUMN {name} {ddl_type}")
+            )
 
 
 def init_db(db_path: Path | None = None) -> None:
     engine = get_engine(db_path)
     SQLModel.metadata.create_all(engine)
-    _migrate_pipeline_run_columns(engine)
+    _migrate_additive_columns(engine, PipelineRun, _PIPELINE_RUN_ADDITIVE_COLUMNS)
+    _migrate_additive_columns(engine, ReviewSuggestion, _REVIEW_SUGGESTION_ADDITIVE_COLUMNS)
 
 
 def get_session(db_path: Path | None = None) -> Session:

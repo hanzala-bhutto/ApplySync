@@ -131,7 +131,10 @@ class ReviewSuggestion(SQLModel, table=True):
     # Existing application this relates to, if any (None for a suggested
     # brand-new application that doesn't match anything on record).
     application_id: int | None = Field(default=None, foreign_key="application.id")
-    # "new_application" | "update_existing" | "reclassify_irrelevant"
+    # "new_application" | "update_existing" | "reclassify_irrelevant" (full audit)
+    # | "merge_into" (confidence-routed merge: the pipeline auto-created a new
+    # application but the disambiguation agent thought, with low confidence, it
+    # belonged to application_id - approving collapses the new row into that one)
     action: str
     previous_classification: str
     suggested_classification: str
@@ -142,6 +145,10 @@ class ReviewSuggestion(SQLModel, table=True):
     previous_extract_json: str | None = None
     suggested_extract_json: str | None = None
     status: str = "pending"
+    # The disambiguation agent's confidence ("high"/"medium"/"low") for a
+    # merge_into suggestion, so a human can see how unsure the pipeline was.
+    # None for full-audit suggestions, which don't come from the agent.
+    confidence: str | None = None
     pipeline_run_id: str
     created_at: datetime = Field(default_factory=_utcnow)
     reviewed_at: datetime | None = None

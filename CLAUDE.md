@@ -952,9 +952,24 @@ merged into `Application`. Locked with the user, ordered by dependency:
          breaking ClickHouse auth immediately with no restart needed to
          trigger it - resolved by getting the fix merged promptly, not by
          changing the mount strategy.
-      3. [ ] Confidence-routed merges: agent verdicts below a confidence bar
-         become ReviewSuggestions (table + approve/reject UI already exist)
-         instead of applying silently.
+      3. [x] Confidence-routed merges: the disambiguation agent's
+         `submit_verdict` now carries a `confidence` enum (high/medium/low, an
+         enum not a float since this model does unreliable numeric reasoning).
+         A `same_application`/`duplicate` verdict below
+         `settings.disambiguation_min_auto_merge_confidence` (default "medium",
+         so only "low" routes) is no longer applied silently: the email is
+         written as a NEW application (recoverable, the same fail-open direction
+         the agent's error path already takes) and a `merge_into`
+         `ReviewSuggestion` is queued for a human. Approve collapses the new row
+         into the candidate via a new `repo.merge_applications(source_ids,
+         target_id)` (extracted from the duplicate-cleanup script's `merge_group`
+         so there's one merge implementation, delete-sources-before-updating-
+         target to avoid the UNIQUE-tuple collision); reject and reject-all stay
+         pure no-ops (both rows simply remain separate, nothing lost, no
+         surprise writes). `ReviewSuggestion` gained a `confidence` column
+         (additive migration generalized in `init_db` to cover it too). The
+         `/review` card shows a confidence badge + a merge explanation.
+         Feasibility: `docs/feasibility/confidence-routed-merges.md`.
       4. [x] Tiered models (issues/PRs #72/#75, #74): `settings.
          llm_escalation_model` (the larger, slower model this project ran
          before switching to nano for speed) now serves three narrow,

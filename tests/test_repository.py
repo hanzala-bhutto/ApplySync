@@ -819,3 +819,123 @@ def test_last_successful_run_started_at_excludes_failed_runs_that_still_finished
     result = repo.last_successful_run_started_at(session)
 
     assert result == good_run.started_at
+
+
+# --- merge_applications + confidence-routed merge approval ---
+
+
+def _app_with_event(session, *, company, title, platform, applied, status, source_email_id, event_date):
+    app = repo.create_application(
+        session,
+        company_name=company,
+        job_title=title,
+        platform=platform,
+        applied_date=applied,
+        current_status=status,
+    )
+    repo.add_status_event(
+        session,
+        application_id=app.id,
+        status=status,
+        event_date=event_date,
+        source_email_id=source_email_id,
+    )
+    return app
+
+
+def test_merge_applications_collapses_source_into_target(session):
+    target = _app_with_event(
+        session, company="EGYM", title="Engineer", platform="other", applied=date(2026, 6, 10),
+        status="applied", source_email_id="e-target", event_date=datetime(2026, 6, 10, 9, 0, 0),
+    )
+    source = _app_with_event(
+        session, company="EGYM SE", title="Engineer", platform="linkedin", applied=date(2026, 6, 5),
+        status="rejected", source_email_id="e-source", event_date=datetime(2026, 6, 20, 9, 0, 0),
+    )
+
+    merged = repo.merge_applications(session, source_ids=[source.id], target_id=target.id)
+
+    # Target kept, source gone.
+    assert merged.id == target.id
+    assert repo.get_application(session, source.id) is None
+    # Both events now hang off the target.
+    timeline = repo.application_timeline(session, target.id)
+    assert len(timeline) == 2
+    # Earliest applied_date wins, latest event drives current_status.
+    assert merged.applied_date == date(2026, 6, 5)
+    assert merged.current_status == "rejected"
+
+
+def test_merge_applications_noop_when_target_missing_or_self(session):
+    app = _app_with_event(
+        session, company="Acme", title="Eng", platform="other", applied=date(2026, 1, 1),
+        status="applied", source_email_id="e1", event_date=datetime(2026, 1, 1, 9, 0, 0),
+    )
+    # Self-merge is ignored, target unchanged and still present.
+    result = repo.merge_applications(session, source_ids=[app.id], target_id=app.id)
+    assert result.id == app.id
+    assert repo.get_application(session, app.id) is not None
+    # Unknown target returns None.
+    assert repo.merge_applications(session, source_ids=[app.id], target_id=99999) is None
+
+
+def test_approve_merge_into_suggestion_collapses_new_row_into_candidate(session):
+    candidate = _app_with_event(
+        session, company="Nagarro", title="Backend Engineer", platform="linkedin",
+        applied=date(2026, 6, 1), status="applied", source_email_id="seed",
+        event_date=datetime(2026, 6, 1, 9, 0, 0),
+    )
+    # The pipeline auto-created this new row for the ambiguous email (msg-new).
+    new_app = _app_with_event(
+        session, company="Nagarro", title="(unspecified role)", platform="linkedin",
+        applied=date(2026, 6, 15), status="interview", source_email_id="msg-new",
+        event_date=datetime(2026, 6, 15, 9, 0, 0),
+    )
+    suggestion = repo.create_review_suggestion(
+        session,
+        message_id="msg-new",
+        action="merge_into",
+        application_id=candidate.id,
+        previous_classification="relevant",
+        suggested_classification="relevant",
+        confidence="low",
+        pipeline_run_id="run-1",
+    )
+
+    approved = repo.approve_review_suggestion(session, suggestion.id)
+
+    assert approved.status == "approved"
+    # new_app collapsed into candidate; only candidate remains, with both events.
+    assert repo.get_application(session, new_app.id) is None
+    timeline = repo.application_timeline(session, candidate.id)
+    assert len(timeline) == 2
+    assert repo.get_application(session, candidate.id).current_status == "interview"
+
+
+def test_reject_merge_into_suggestion_keeps_both_rows(session):
+    candidate = _app_with_event(
+        session, company="Nagarro", title="Backend Engineer", platform="linkedin",
+        applied=date(2026, 6, 1), status="applied", source_email_id="seed",
+        event_date=datetime(2026, 6, 1, 9, 0, 0),
+    )
+    new_app = _app_with_event(
+        session, company="Nagarro", title="(unspecified role)", platform="linkedin",
+        applied=date(2026, 6, 15), status="interview", source_email_id="msg-new",
+        event_date=datetime(2026, 6, 15, 9, 0, 0),
+    )
+    suggestion = repo.create_review_suggestion(
+        session,
+        message_id="msg-new",
+        action="merge_into",
+        application_id=candidate.id,
+        previous_classification="relevant",
+        suggested_classification="relevant",
+        confidence="low",
+        pipeline_run_id="run-1",
+    )
+
+    repo.reject_review_suggestion(session, suggestion.id)
+
+    # Reject is a pure no-op on data: both applications still exist, untouched.
+    assert repo.get_application(session, candidate.id) is not None
+    assert repo.get_application(session, new_app.id) is not None

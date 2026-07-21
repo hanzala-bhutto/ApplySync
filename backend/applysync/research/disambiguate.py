@@ -94,6 +94,13 @@ create a new row.
   - matched_application_id: the candidate id for same_application or duplicate; \
 0 for different_application.
   - reasoning: one or two sentences on why.
+  - confidence: "high" only when the evidence you gathered (status history or \
+the source email) directly confirms the merge; "medium" when the match is \
+strong but partly inferred; "low" when you are mostly guessing. A \
+same_application/duplicate verdict below the configured bar is NOT applied \
+silently - it is queued for a human to confirm - so do not inflate confidence \
+to force a merge through; an honest "low" is safer than a wrong "high". \
+(Ignored for different_application.)
 
 Prefer "different_application" only when the evidence genuinely points to a \
 separate role - a MISSING title alone is not proof of a different application. \
@@ -298,10 +305,15 @@ def run_disambiguation(
     submitted: dict = {}
 
     @tool
-    def submit_verdict(decision: str, matched_application_id: int, reasoning: str) -> str:
+    def submit_verdict(
+        decision: str, matched_application_id: int, reasoning: str, confidence: str
+    ) -> str:
         """Submit the final decision. decision is one of same_application,
         different_application, duplicate. matched_application_id is the candidate id
-        for same_application/duplicate, or 0 for different_application."""
+        for same_application/duplicate, or 0 for different_application. confidence is
+        one of high, medium, low (how sure you are of a same_application/duplicate
+        merge - a low-confidence merge is routed to human review, not applied
+        silently; ignored for different_application)."""
         if decision in ("same_application", "duplicate") and matched_application_id not in evidence_gathered:
             return (
                 "rejected: a same_application/duplicate verdict requires calling "
@@ -309,7 +321,7 @@ def run_disambiguation(
                 f"({matched_application_id}) first - you have not done so yet. "
                 "Gather that evidence, then resubmit."
             )
-        submitted["verdict"] = (decision, matched_application_id, reasoning)
+        submitted["verdict"] = (decision, matched_application_id, reasoning, confidence)
         return "verdict recorded"
 
     tools = [get_status_history, read_source_email, web_entity_check, submit_verdict]
@@ -373,7 +385,11 @@ def run_disambiguation(
 
 
 def _build_verdict(
-    decision: str, matched_application_id: int, reasoning: str, candidate_by_id: dict
+    decision: str,
+    matched_application_id: int,
+    reasoning: str,
+    confidence: str,
+    candidate_by_id: dict,
 ) -> DisambiguationVerdict:
     matched_id = matched_application_id or None
     if decision in ("same_application", "duplicate"):
@@ -384,9 +400,18 @@ def _build_verdict(
             )
     else:
         matched_id = None
+    # The model occasionally returns a stray confidence string; normalize an
+    # unrecognized value to the safest bucket (low) so it routes to review
+    # rather than tripping the Literal validation and failing the whole verdict.
+    normalized_confidence = confidence.strip().lower() if isinstance(confidence, str) else "low"
+    if normalized_confidence not in ("high", "medium", "low"):
+        normalized_confidence = "low"
     try:
         return DisambiguationVerdict(
-            decision=decision, matched_application_id=matched_id, reasoning=reasoning
+            decision=decision,
+            matched_application_id=matched_id,
+            reasoning=reasoning,
+            confidence=normalized_confidence,
         )
     except Exception as exc:  # noqa: BLE001 - invalid enum/shape from the model
         raise DisambiguationError(f"invalid verdict: {exc}") from exc

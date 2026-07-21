@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     # fast model can't confidently handle, not something called per-email.
     llm_escalation_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     nvidia_api_key: str = ""
+    # Confidence-routed merges (M5): the disambiguation agent's
+    # same_application/duplicate verdict is applied automatically only when its
+    # self-reported confidence is at or above this bar ("high"/"medium"/"low").
+    # Below it, the email is written as a new application and a merge
+    # ReviewSuggestion is queued for a human instead of merging silently. Default
+    # "medium" routes only "low"-confidence merges to review; set "high" to also
+    # review "medium" ones if wrong merges are seen.
+    disambiguation_min_auto_merge_confidence: str = "medium"
     gmail_client_secrets_path: Path = Path(".secrets/credentials.json")
     gmail_token_path: Path = Path(".secrets/token.json")
     db_path: Path = Path("applysync.db")
