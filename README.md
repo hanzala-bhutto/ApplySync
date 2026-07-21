@@ -12,6 +12,7 @@ An email-driven job application tracker that pulls your applications out of your
 - [LangGraph Decision Making](#langgraph-decision-making)
 - [Data Flow](#data-flow)
 - [Setup](#setup)
+- [LLMOps](#llmops)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
@@ -295,6 +296,50 @@ npm run dev
 ```
 
 Both `applysync sync` and a dashboard-triggered sync fetch new application-related emails from Gmail, run them through the LangGraph pipeline, and persist the results to a local SQLite database (`applysync.db` by default).
+
+## LLMOps
+
+A prompt or model change is a production deploy: the output is probabilistic, correctness is a percentage rather than a boolean, and the model is a third-party dependency that can drift under you. This project treats that seriously, but stays zero-vendor and zero-egress: everything runs self-hosted, and no email content, database, or gold dataset ever leaves the machine.
+
+Because the gold eval dataset holds real email bodies (PII, gitignored) and the eval hits the live rate-limited model, the checks split across **two planes**:
+
+| Check | Runs where | Touches PII / live model? | How to run |
+| --- | --- | --- | --- |
+| Unit tests, lint, frontend build + Playwright E2E | GitHub Actions (cloud) | No (LLM mocked, `/api/*` mocked) | automatic on every PR (`.github/workflows/ci.yml`) |
+| Prompt/schema-drift guard (locks the classifier's status space) | GitHub Actions (cloud) | No | `pytest tests/test_schema_drift.py` |
+| Eval gate (per-stage accuracy vs thresholds) | Local | Yes | `python eval/run_eval.py --strict` |
+| Pre-push enforcement of the eval gate | Local git hook | Yes | `sh scripts/install-hooks.sh` (once), then blocks any push that changes prompts/model/schema and regresses; bypass with `git push --no-verify` |
+| Quality-over-time ledger | Local, committed | No (aggregate numbers only) | `python eval/run_eval.py --strict --ledger` appends to `eval/baseline.json` |
+| Production feedback loop (score traces, pull failures into gold) | Local + self-hosted Langfuse | Yes | `backend/scripts/run_llm_judge_backfill.py`, `backend/scripts/pull_flagged_traces.py` |
+
+The eval gate never runs in cloud CI (no PII data there, and it would call the rate-limited model); only the pass/fail decision leaves the machine. `eval/baseline.json` is the one eval artifact allowed on the public repo, and it is aggregate-only: dates, git SHA, model name, and accuracy percentages, never a message ID, email body, or company name.
+
+### What this project exercises, as an AI-engineering scorecard
+
+Rated against a broad AI-engineering competency list. "Learned" means real production scar tissue (a bug hit and a fix shipped), not a concept read about. The "Not touched" rows all sit below the hosted-model API boundary or assume multiple tenants, out of scope for a single-user, local-first tool that consumes a hosted endpoint.
+
+| Competency | Rating | Evidence in this repo |
+| --- | --- | --- |
+| Harness engineering (not just prompt engineering) | Learned | Single-responsibility LangGraph nodes, conditional edges, checkpointing vs `processed_emails` idempotency |
+| Context engineering | Learned | Separating "was an application submitted" from "good/bad news"; ignoring "similar jobs" sections; accuracy degrading as the prompt grew |
+| Structured-output failures, validation, fallback chains | Learned | `with_structured_output` returns empty on list fields, switched to `PydanticOutputParser` + flat scalar schemas; placeholder-text normalization |
+| Function-calling reliability, tool contracts, idempotency | Learned | Disambiguation agent: scalar-only tool args, terminal `submit_verdict`, hand-rolled loop; upsert marks processed exactly once |
+| Agent guardrails, loop/tool budgets, termination | Learned | `MAX_AGENT_TURNS` tuned against real data, fail-open on error |
+| Model routing, graceful fallback, degraded-mode UX | Learned | Tiered fast + escalation model, fail-open everywhere, clean degrade without gmail/search clients |
+| Evals: golden sets, regression, LLM-as-judge, human | Learned | `eval/run_eval.py`, human-verified gold, `--strict` gate, per-stage judge, a regression caught and reverted |
+| LLM observability (traces, spans, tokens, latency, drift) | Learned | Self-hosted Langfuse; the shared-rate-limiter latency bug was invisible until traces existed |
+| Latency / quality / cost / reliability tradeoffs | Learned | 9x model-speed swap that cost then recovered accuracy, the `N/40*60` throughput floor, escalation only where a wrong merge is unrecoverable |
+| LLMOps as CI/CD + gating + versioning | Learned | This section: cloud CI, local eval gate, pre-push enforcement, committed metrics ledger |
+| Prompt caching vs semantic caching | Partial | `CompanyProfile` cache keyed by company name with `refresh` invalidation; prompt caching N/A on the hosted endpoint |
+| RAG: chunking, embeddings, hybrid search, reranking | Partial | SearXNG retrieval + grounded synthesis with source URLs; no vector store, embeddings, or reranking |
+| Retrieval evals: grounding, attribution, citation | Partial | Research card stores and shows its source URLs; no recall/precision metrics |
+| Safety: prompt-injection defense, leakage, permissions | Partial | Prompt-injection hardening, readonly Gmail scope, local-first/keyless; no adversarial injection suite yet |
+| Cost attribution per feature / workflow / user | Partial | Rate-limit math and tiered models, Langfuse token capture; no per-feature cost surface |
+| Fine-tuning vs ICL vs RAG vs distillation | Partial | Chose in-context + light RAG deliberately; never practiced fine-tuning or distillation |
+| KV cache, prefill/decode, batching, paged attention | Not touched | Below the hosted-model API boundary |
+| Quantization (INT8/INT4/FP8, AWQ, GPTQ) | Not touched | Would require self-hosting the model |
+| Speculative decoding vs quantization vs distillation | Not touched | Would require self-hosting the model |
+| Multi-tenant isolation, cache safety, cross-user contamination | Not touched | Single-user tool by design |
 
 ## Roadmap
 

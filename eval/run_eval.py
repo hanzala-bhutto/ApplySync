@@ -23,17 +23,36 @@ specifically vs. the base model/prompt.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from applysync.config import get_settings, get_sources
-from applysync.evaluation import StagePrediction, Thresholds, format_report, score_samples
+from applysync.evaluation import (
+    StagePrediction,
+    Thresholds,
+    append_ledger,
+    format_report,
+    report_to_ledger,
+    score_samples,
+)
 from applysync.evaluation.scoring import load_samples
 from applysync.gmail.models import RawEmail
 from applysync.llm import get_chat_model
 from applysync.pipeline.nodes import make_classify_and_extract_node, make_scrutinize_relevance_node
 
 DEFAULT_SAMPLES = Path("eval/samples/gold.json")
+DEFAULT_LEDGER = Path("eval/baseline.json")
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+    except Exception:
+        return "unknown"
 
 
 def run_pipeline_stages(samples, model, sources, *, escalation_model=None) -> dict[str, StagePrediction]:
@@ -85,6 +104,16 @@ def main() -> int:
     parser.add_argument(
         "--no-escalation", action="store_true", help="disable the escalation model, fast model only"
     )
+    parser.add_argument(
+        "--ledger",
+        nargs="?",
+        const=DEFAULT_LEDGER,
+        type=Path,
+        default=None,
+        help="append an aggregate-only snapshot (numbers only, no PII) to the "
+        "committed baseline ledger for tracking quality over time "
+        f"(default file {DEFAULT_LEDGER})",
+    )
     args = parser.parse_args()
 
     samples = load_samples(args.samples, include_unverified=args.include_unverified)
@@ -113,6 +142,19 @@ def main() -> int:
     thresholds = Thresholds()
     print()
     print(format_report(report, thresholds))
+
+    if args.ledger is not None:
+        entry = report_to_ledger(
+            report,
+            thresholds,
+            git_sha=_git_sha(),
+            model=settings.llm_model,
+            escalation=escalation_model is not None,
+            verified_only=not args.include_unverified,
+            at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        append_ledger(args.ledger, entry)
+        print(f"\nappended aggregate snapshot to {args.ledger} (numbers only, no PII)")
 
     if args.strict and not thresholds.passed(report):
         return 1

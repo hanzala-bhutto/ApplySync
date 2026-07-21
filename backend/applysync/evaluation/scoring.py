@@ -296,3 +296,58 @@ def save_samples(path, samples: list[EvalSample]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
+
+
+def report_to_ledger(
+    report: EvalReport,
+    thresholds: Thresholds,
+    *,
+    git_sha: str,
+    model: str,
+    escalation: bool,
+    verified_only: bool,
+    at: str,
+) -> dict:
+    """Aggregate-only snapshot of an eval run, safe to commit to a PUBLIC repo.
+
+    Deliberately contains NUMBERS ONLY: no message IDs, no email content, no
+    company/title strings, no per-sample mismatches. The gold dataset itself is
+    PII and gitignored (eval/samples/*.json); this ledger is the one eval
+    artifact allowed on the public repo, so it must never carry anything that
+    could identify an email or an employer - only the metrics whose time series
+    is what makes the eval observability rather than a one-shot test."""
+    return {
+        "at": at,
+        "git_sha": git_sha,
+        "model": model,
+        "escalation": escalation,
+        "verified_only": verified_only,
+        "samples_scored": report.total,
+        "scrutiny_false_rejects": len(report.scrutiny_false_rejects),
+        "scrutiny_relevant_total": report.scrutiny_relevant_total,
+        "scrutiny_over_passes": report.scrutiny_over_passes,
+        "classification_accuracy": round(report.classification_accuracy, 4),
+        "classified_total": report.classified_total,
+        "company_accuracy": round(report.company_accuracy, 4),
+        "title_accuracy": round(report.title_accuracy, 4),
+        "status_accuracy": round(report.status_accuracy, 4),
+        "extraction_total": report.extraction_total,
+        "thresholds_passed": thresholds.passed(report),
+    }
+
+
+def append_ledger(path, entry: dict) -> None:
+    """Append one aggregate entry to the committed baseline ledger, keeping the
+    file a chronological JSON array so `git log`/PR diffs show quality drift
+    over time. Creates the file if absent."""
+    from pathlib import Path
+
+    p = Path(path)
+    history: list[dict] = []
+    if p.exists():
+        with open(p, encoding="utf-8") as f:
+            history = json.load(f)
+    history.append(entry)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+        f.write("\n")
