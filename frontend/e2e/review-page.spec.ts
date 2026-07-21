@@ -143,7 +143,7 @@ test('reject all is gated behind a confirm dialog and dismisses every suggestion
   })
 
   await page.goto('/review')
-  await expect(page.getByText('2 suggestions')).toBeVisible()
+  await expect(page.getByText('2 pending suggestions', { exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: 'Reject All' }).click()
   await expect(page.getByRole('heading', { name: 'Reject all suggestions?' })).toBeVisible()
