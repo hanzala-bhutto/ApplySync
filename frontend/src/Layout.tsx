@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { GmailConnectionBanner } from './components/GmailConnectionBanner'
 import { SyncButton } from './components/SyncButton'
+import { ThemeToggle } from './components/ThemeToggle'
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true },
@@ -46,7 +47,8 @@ export function Layout({ children }: { children: ReactNode }) {
               </NavLink>
             ))}
           </nav>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
             <SyncButton />
           </div>
         </div>
