@@ -11,26 +11,29 @@ import { Analytics } from './pages/Analytics'
 import { Sync } from './pages/Sync'
 import { Review } from './pages/Review'
 import { ToastProvider } from './lib/toast'
+import { ThemeProvider } from './lib/theme'
 
 const queryClient = new QueryClient()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <BrowserRouter>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/reminders" element={<Reminders />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/sync" element={<Sync />} />
-              <Route path="/review" element={<Review />} />
-              <Route path="/applications/:id" element={<ApplicationDetail />} />
-            </Routes>
-          </Layout>
-        </BrowserRouter>
-      </ToastProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <BrowserRouter>
+            <Layout>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/reminders" element={<Reminders />} />
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/sync" element={<Sync />} />
+                <Route path="/review" element={<Review />} />
+                <Route path="/applications/:id" element={<ApplicationDetail />} />
+              </Routes>
+            </Layout>
+          </BrowserRouter>
+        </ToastProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   </StrictMode>,
 )
