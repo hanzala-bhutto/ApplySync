@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # fast model can't confidently handle, not something called per-email.
     llm_escalation_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     nvidia_api_key: str = ""
+    # Optional: run the disambiguation agent on Groq (faster, separate rate
+    # budget) with NVIDIA as the fallback. Active only when both are set.
+    groq_api_key: str = ""
+    groq_agent_model: str = ""
     # Confidence-routed merges (M5): the disambiguation agent's
     # same_application/duplicate verdict is applied automatically only when its
     # self-reported confidence is at or above this bar ("high"/"medium"/"low").

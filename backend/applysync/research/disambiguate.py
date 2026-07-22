@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -197,6 +198,21 @@ def _relative_to_new_email(other: datetime | None, new_email_date: datetime | No
     return f" ({-delta_days} day{'s' if delta_days != -1 else ''} BEFORE the new email)"
 
 
+# ATS requisition IDs are 5-8 digit numbers (e.g. SAP's "453330"), bounded to
+# skip years and short counts. A shared req ID between the new email and a
+# candidate means the same job posting - see the short-circuit in
+# run_disambiguation.
+_REQ_ID_RE = re.compile(r"\b\d{5,8}\b")
+
+
+def _extract_req_ids(*texts: str | None) -> set[str]:
+    ids: set[str] = set()
+    for t in texts:
+        if t:
+            ids.update(_REQ_ID_RE.findall(t))
+    return ids
+
+
 def _format_candidates(candidates: list[Application]) -> str:
     lines = []
     for c in candidates:
@@ -216,6 +232,7 @@ def run_disambiguation(
     gmail_client,
     search_client,
     model,
+    fallback_model=None,
 ) -> DisambiguationVerdict:
     """Hand-rolled LLM tool loop: the model chooses which tools to call to
     gather evidence, then submits a structured verdict via the submit_verdict
@@ -230,6 +247,23 @@ def run_disambiguation(
     """
     candidate_by_id = {c.id: c for c in candidates}
     new_email_date = _parse_email_date(current_email.date)
+
+    # A shared ATS requisition ID is an exact same-posting match - decide it
+    # here in Python rather than asking the model (which gets this wrong even
+    # with the ID in front of it). Only when exactly one candidate matches; if
+    # several do, let the agent disambiguate.
+    new_req_ids = _extract_req_ids(current_email.subject, current_email.body)
+    id_matches = [c for c in candidates if _extract_req_ids(c.job_title) & new_req_ids]
+    if len(id_matches) == 1:
+        c = id_matches[0]
+        shared = sorted(_extract_req_ids(c.job_title) & new_req_ids)[0]
+        return _build_verdict(
+            "same_application",
+            c.id,
+            f"New email and candidate {c.id} share requisition ID {shared}.",
+            "high",
+            candidate_by_id,
+        )
 
     # A same_application/duplicate verdict merges data into an existing row -
     # much harder to undo than an extra row - so it must be backed by the
@@ -326,9 +360,14 @@ def run_disambiguation(
 
     tools = [get_status_history, read_source_email, web_entity_check, submit_verdict]
     tools_by_name = {t.name: t for t in tools}
-    bound = model.bind_tools(tools).with_retry(
-        stop_after_attempt=5, wait_exponential_jitter=True
-    )
+    # Primary model, falling back to fallback_model on any failure (used for the
+    # Groq-agent -> NVIDIA-escalation hybrid: Groq is fast but rate-limited, so
+    # a 429 or outage transparently switches to NVIDIA). with_retry is the
+    # backstop if both providers fail transiently.
+    bound = model.bind_tools(tools)
+    if fallback_model is not None:
+        bound = bound.with_fallbacks([fallback_model.bind_tools(tools)])
+    bound = bound.with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
 
     messages = [
         SystemMessage(

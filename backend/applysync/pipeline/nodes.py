@@ -416,6 +416,7 @@ def make_disambiguate_node(
     gmail_client,
     search_client,
     escalation_model=None,
+    agent_model=None,
     min_auto_merge_confidence: str | None = None,
 ):
     """LLM tool-loop agent for the ambiguous match case (see
@@ -430,6 +431,12 @@ def make_disambiguate_node(
     no fast-path cost to always giving it the more careful model. Falls back to
     model when no escalation model is configured.
 
+    agent_model, if given, takes precedence over escalation_model for THIS node
+    only (the disambiguation agent), leaving scrutiny/classify_and_extract's
+    escalation retries on the NVIDIA escalation model. This is the hybrid path
+    (see llm.get_agent_model): route just the agent to Groq for its own rate
+    budget and lower latency, without changing extraction.
+
     min_auto_merge_confidence gates when a same_application/duplicate verdict is
     applied directly vs. routed to human review (M5 confidence-routed merges).
     Defaults to settings.disambiguation_min_auto_merge_confidence; a verdict
@@ -438,7 +445,10 @@ def make_disambiguate_node(
     """
     from applysync.research.disambiguate import DisambiguationError, run_disambiguation
 
-    llm = escalation_model or model
+    # Run on the Groq agent model when configured, falling back to the NVIDIA
+    # escalation model on failure; otherwise just use the best NVIDIA model.
+    llm = agent_model or escalation_model or model
+    fallback = escalation_model if agent_model else None
     min_confidence = min_auto_merge_confidence or get_settings().disambiguation_min_auto_merge_confidence
 
     def disambiguate_match(state: EmailState) -> dict:
@@ -462,6 +472,7 @@ def make_disambiguate_node(
                 gmail_client=gmail_client,
                 search_client=search_client,
                 model=llm,
+                fallback_model=fallback,
             )
         except DisambiguationError as exc:
             logger.warning("Disambiguation failed, defaulting to new application: %s", exc)
