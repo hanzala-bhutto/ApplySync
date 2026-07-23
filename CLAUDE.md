@@ -137,6 +137,27 @@ information):
   here so scheduled re-runs never reprocess it.
 - `pipeline_runs`: per-run stats, powers "last synced" in the UI.
 
+Two more tables exist beyond the four core ones above: `company_profiles`
+(web-researched company profiles, cached per company, kept deliberately separate
+from `applications`) and `review_suggestions` (full-audit proposed changes
+awaiting human approval). The physical table names are single-word/lowercased
+(`statusevent`, `processedemail`, `pipelinerun`, `companyprofile`,
+`reviewsuggestion`) because SQLModel derives the table name from the class name;
+the code refers to them via the model classes, not raw SQL.
+
+**Schema migrations use Alembic** (`alembic/`, `alembic.ini`). Models are still
+defined in `db/models.py` as SQLModel classes (SQLModel = SQLAlchemy + Pydantic);
+Alembic just versions the *physical* schema so a change no longer means deleting
+the local db. `db/init_db.py::init_db` runs `alembic upgrade head` on startup:
+a fresh db is built from the migrations, and a pre-Alembic db with real data is
+brought to the `0001` baseline and stamped in place (never recreated). New schema
+change = `applysync db revision --autogenerate -m "..."` (diffs models vs. db),
+review the generated file, then `applysync db upgrade`. The old hand-rolled
+`_migrate_additive_columns` ALTER hack is frozen as a one-time pre-Alembic bridge
+(`_LEGACY_BRIDGE_COLUMNS`), not the go-forward mechanism - do not extend it. Tests
+still build throwaway schemas directly via `SQLModel.metadata.create_all`
+(`tests/conftest.py`), which stays in exact parity with the baseline migration.
+
 ## LangGraph pipeline nodes
 
 The compiled graph (`pipeline/graph.py::build_graph`) processes **one email
@@ -263,9 +284,10 @@ backend/
     search/client.py          # SearXNG web-search client (foundation for research features)
     web/app.py, web/api.py
     scheduler/run_scheduler.py
-    cli.py                    # `applysync sync`, `applysync serve`, `applysync search`
+    cli.py                    # `applysync sync|serve|search`, `applysync db upgrade|revision|...`
   config/sources.yaml
   scripts/gmail_probe.py
+alembic.ini, alembic/         # Alembic schema migrations (env.py + versions/0001_baseline.py)
 frontend/                     # React (Vite + TypeScript) dashboard, separate dev server
 searxng/                      # self-hosted SearXNG (docker-compose.yml + settings.yml)
 eval/samples/, eval/run_eval.py   # phase 2
@@ -342,6 +364,10 @@ when a rule changes.
 - **Accuracy/correctness fixes**: status-ordering + job-title extraction (#67),
   relevance-classification (#72/#75, 79.8% -> 98.2%), real-time flow viz + Stop
   button (#89).
+- **Alembic schema migrations**: replaced the "delete your db to change the
+  schema" pain + the additive-column ALTER hack with real versioned migrations
+  (`alembic/`, `0001` baseline, `applysync db` CLI); adopts the existing
+  populated db without data loss. SQLModel stays the model layer.
 
 ### Not built yet
 

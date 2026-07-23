@@ -64,5 +64,62 @@ def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> No
     uvicorn.run("applysync.web.app:app", host=host, port=port, reload=reload)
 
 
+db_app = typer.Typer(help="Database schema migrations (Alembic).")
+app.add_typer(db_app, name="db")
+
+
+def _db_config():
+    from applysync.config import get_settings
+    from applysync.db.init_db import _alembic_config
+
+    return _alembic_config(get_settings().db_path)
+
+
+@db_app.command("upgrade")
+def db_upgrade(revision: str = "head") -> None:
+    """Apply migrations up to REVISION (default: head). This is what init_db
+    runs on startup; call it directly to migrate without launching the app."""
+    from alembic import command
+
+    typer.echo(f"upgrading to {revision} ...")
+    command.upgrade(_db_config(), revision)
+    typer.echo("done")
+
+
+@db_app.command("downgrade")
+def db_downgrade(revision: str) -> None:
+    """Revert migrations down to REVISION (e.g. -1 for one step back)."""
+    from alembic import command
+
+    command.downgrade(_db_config(), revision)
+
+
+@db_app.command("current")
+def db_current() -> None:
+    """Show the migration revision the database is currently at."""
+    from alembic import command
+
+    command.current(_db_config())
+
+
+@db_app.command("history")
+def db_history() -> None:
+    """List the migration revisions, newest first."""
+    from alembic import command
+
+    command.history(_db_config())
+
+
+@db_app.command("revision")
+def db_revision(message: str, autogenerate: bool = True) -> None:
+    """Create a new migration. With --autogenerate (default), Alembic diffs the
+    models against the current database and writes the ALTERs for you; review
+    the generated file before committing. Use --no-autogenerate for an empty
+    migration to hand-write (e.g. a data backfill)."""
+    from alembic import command
+
+    command.revision(_db_config(), message=message, autogenerate=autogenerate)
+
+
 if __name__ == "__main__":
     app()
