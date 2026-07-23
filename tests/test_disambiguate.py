@@ -23,6 +23,7 @@ from applysync.research.disambiguate import (
     MAX_AGENT_TURNS,
     DisambiguationError,
     _build_verdict,
+    _extract_req_ids,
     run_disambiguation,
 )
 from tests.fakes import (
@@ -407,6 +408,105 @@ def test_agent_never_submitting_raises_after_turn_limit(session):
             search_client=FakeSearchClient(results=[]),
             model=model,
         )
+
+
+# --- requisition-ID short-circuit (deterministic, before any model call) ----
+
+
+def test_extract_req_ids_matches_five_to_eight_digits_only():
+    """ATS req IDs are 5-8 digit numbers; 4-digit years and 9+ digit strings
+    are deliberately excluded, and multiple ids in one text are all pulled."""
+    assert _extract_req_ids("Requisition 453330 for the role") == {"453330"}
+    assert _extract_req_ids("you applied in 2026") == set()  # 4 digits (year)
+    assert _extract_req_ids("tracking id 123456789") == set()  # 9 digits, too long
+    assert _extract_req_ids("REQ-12345 / ref 87654321") == {"12345", "87654321"}
+    assert _extract_req_ids(None, "", "no digits at all") == set()
+
+
+def test_shared_requisition_id_short_circuits_to_same_application_without_model(session):
+    """A 5-8 digit ATS req ID shared between the new email and exactly one
+    candidate is an exact same-posting signal, decided in Python before the
+    model runs at all (the model got this wrong even with the ID in front of
+    it). The empty model script would raise if the agent loop were ever
+    entered, so invocations==0 proves the short-circuit fired."""
+    app = _seed_application(session, title="Software Engineer 453330")
+    model = FakeToolLoopModel([])  # raises if invoked
+
+    email = _email(
+        message_id="msg-2",
+        subject="Your application - Req 453330",
+        body="Reference number 453330",
+    )
+    verdict = run_disambiguation(
+        email,
+        _extracted(job_title=UNSPECIFIED_JOB_TITLE),
+        [app],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    assert model.invocations == 0  # short-circuited, model never touched
+    assert verdict.decision == "same_application"
+    assert verdict.matched_application_id == app.id
+    assert verdict.confidence == "high"
+
+
+def test_requisition_id_shared_by_multiple_candidates_defers_to_agent(session):
+    """When more than one candidate shares the req ID the deterministic pick is
+    ambiguous, so it must fall through to the agent rather than guess one."""
+    first = _seed_application(session, title="Engineer I 453330")
+    second = _seed_application(session, title="Engineer II 453330")
+    model = FakeToolLoopModel(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": second.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", second.id),
+        ]
+    )
+
+    email = _email(message_id="msg-2", subject="Update on requisition 453330", body="453330")
+    verdict = run_disambiguation(
+        email,
+        _extracted(job_title=UNSPECIFIED_JOB_TITLE),
+        [first, second],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    assert model.invocations == 2  # short-circuit skipped, the agent ran
+    assert verdict.matched_application_id == second.id
+
+
+def test_no_shared_requisition_id_runs_the_agent(session):
+    """A req ID present on only one side (not shared) does not short-circuit -
+    the agent still runs."""
+    app = _seed_application(session, title="Software Engineer 453330")
+    model = FakeToolLoopModel(
+        [
+            FakeAIResponse(
+                tool_calls=[{"name": "get_status_history", "args": {"application_id": app.id}, "id": "t1"}]
+            ),
+            _verdict_call("same_application", app.id),
+        ]
+    )
+
+    email = _email(message_id="msg-2", subject="Update on your application", body="no id here")
+    run_disambiguation(
+        email,
+        _extracted(job_title=UNSPECIFIED_JOB_TITLE),
+        [app],
+        session=session,
+        gmail_client=FakeGmailClient(_RAW_MESSAGE),
+        search_client=FakeSearchClient(results=[]),
+        model=model,
+    )
+
+    assert model.invocations == 2  # no shared id, agent ran normally
 
 
 # --- graph routing: ambiguous case goes through the agent -------------------

@@ -179,7 +179,12 @@ is crash-recovery only.
    `disambiguate_match` (the LLM tool-loop agent, see the milestone entry for
    Entity/duplicate resolution and `research/disambiguate.py`) instead of
    blindly creating a new row. The agent fails open to `new_application`, so a
-   degraded run or missing clients never blocks the pipeline.
+   degraded run or missing clients never blocks the pipeline. Before the model
+   runs at all, a deterministic **requisition-ID short-circuit**
+   (`_extract_req_ids`/`_REQ_ID_RE`, 5-8 digit ATS req numbers) resolves the
+   case in Python when the new email and exactly one candidate share a req ID -
+   an exact same-posting signal the model got wrong even with the ID in front
+   of it (see the cross-provider milestone entry below).
 3. `upsert_db`: deterministic, no LLM. Always calls `mark_processed`
    regardless of new/update/duplicate_skip.
 4. `mark_irrelevant` / `mark_extraction_failed`: both just call
@@ -210,6 +215,16 @@ re-running the accuracy check this section describes.
   the classify+extract call, for genuinely transient failures (the free tier
   is a shared pool, so 503s can still happen even under our own 40 RPM cap
   from other users' load).
+- **Optional Groq hybrid for the disambiguation agent only** (`llm.py`:
+  `get_agent_model` -> `ChatGroq`, gated behind `groq_api_key`/`groq_agent_model`
+  in `config.py`). When configured, only `disambiguate_match` runs on Groq
+  (its own account, its own `_limiter(30)` rate budget, ~8x lower latency than
+  the NVIDIA agent path), composed with `.with_fallbacks([nvidia_escalation])`
+  so a Groq 429/outage transparently switches back to NVIDIA. Extraction and
+  scrutiny always stay on NVIDIA. Inactive by default (both env vars unset ->
+  agent uses the NVIDIA escalation model exactly as before). The shared
+  `InMemoryRateLimiter` is now keyed by RPM (`_limiter(rpm)`), so NVIDIA's 40
+  and Groq's 30 each get one process-wide instance rather than one per model.
 
 **Extraction accuracy is fragile to prompt/model changes, verify against
 real emails before trusting a change.** Switching to the faster model above
@@ -839,6 +854,33 @@ merged into `Application`. Locked with the user, ordered by dependency:
       found and merged the same dry-run/`--apply` way as the original
       exact-identity pass. Feasibility report:
       `docs/feasibility/fuzzy-company-matching.md`.
+- [x] **Cross-provider disambiguation agent + requisition-ID short-circuit**
+      (`docs/feasibility/cross-provider-disambiguation-agent.md`, PR #103,
+      merged 2026-07-23; the req-ID short-circuit is unit-tested in
+      `tests/test_disambiguate.py` - extraction bounds, single-match
+      short-circuit-without-model, multi-match defer-to-agent; the Groq
+      provider wiring itself has no dedicated test, since it's a config-gated
+      swap of the model object with a `.with_fallbacks()` composition). Two
+      changes,
+      both scoped to `disambiguate_match` only (extraction/scrutiny untouched):
+      (1) **Optional Groq hybrid**: `llm.get_agent_model` returns a `ChatGroq`
+      when `groq_api_key`+`groq_agent_model` are both set (else `None`), and
+      `make_disambiguate_node` prefers it (`llm = agent_model or
+      escalation_model or model`) with the NVIDIA escalation model composed as
+      a runtime `.with_fallbacks()` fallback in `run_disambiguation` - Groq is
+      fast (~1-3s vs 15-30s under NVIDIA rate contention) and has its own 30
+      RPM account budget, so the agent stops competing with bulk extraction for
+      NVIDIA's 40 RPM; a Groq 429/outage transparently falls back to NVIDIA.
+      The shared limiter is now per-RPM (`_limiter(rpm)`), one instance each
+      for NVIDIA-40 and Groq-30. (2) **Requisition-ID short-circuit**
+      (`_extract_req_ids`, `_REQ_ID_RE` = 5-8 digit numbers): when the new
+      email and exactly one candidate share an ATS req ID, it's decided as
+      `same_application` (high confidence) in Python before the model runs -
+      an A/B on real data surfaced a wrong verdict on a clear same-application
+      pair (shared SAP req ID) that no prompt wording fixed. Provider-agnostic;
+      several matches still fall through to the agent. `agent_model` is threaded
+      as an optional dep through `build_graph`/`compile_graph`/`process_emails`/
+      `run_sync` (defaults `None`, so nothing changes when Groq is unconfigured).
 - [ ] **Company-alias canonicalization.** Resolve a company's official name +
       known aliases via search, store a mapping (new `canonical_name`/alias
       table + `repo` apply helpers). Apply at match time and as a one-off batch
