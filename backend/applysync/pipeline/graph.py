@@ -16,7 +16,7 @@ from applysync.db.models import Application
 from applysync.gmail.client import GmailClient
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import build_search_query
-from applysync.llm import get_chat_model
+from applysync.llm import get_agent_model, get_chat_model
 from applysync.observability import get_langfuse_handler, publish_node_event
 from applysync.run_control import is_cancel_requested
 from applysync.search import get_search_client
@@ -40,6 +40,7 @@ def build_graph(
     gmail_client=None,
     search_client=None,
     escalation_model=None,
+    agent_model=None,
 ) -> StateGraph:
     """One EmailState flows through this graph per invocation (one email per
     graph.invoke call, driven by the loop in process_emails). fetch_emails
@@ -79,6 +80,7 @@ def build_graph(
                 gmail_client=gmail_client,
                 search_client=search_client,
                 escalation_model=escalation_model,
+                agent_model=agent_model,
             ),
         )
     graph.add_node("upsert_db", make_upsert_node(session, run_id=run_id))
@@ -154,6 +156,7 @@ def compile_graph(
     gmail_client=None,
     search_client=None,
     escalation_model=None,
+    agent_model=None,
 ):
     return build_graph(
         model,
@@ -163,6 +166,7 @@ def compile_graph(
         gmail_client=gmail_client,
         search_client=search_client,
         escalation_model=escalation_model,
+        agent_model=agent_model,
     ).compile(checkpointer=checkpointer)
 
 
@@ -202,6 +206,7 @@ def process_emails(
     gmail_client=None,
     search_client=None,
     escalation_model=None,
+    agent_model=None,
     langfuse_handler=None,
 ) -> dict:
     """Core, unit-testable pipeline logic: filters out already-processed
@@ -235,6 +240,7 @@ def process_emails(
         gmail_client=gmail_client,
         search_client=search_client,
         escalation_model=escalation_model,
+        agent_model=agent_model,
     )
 
     new_emails = [e for e in emails if not repo.is_processed(session, e.message_id)]
@@ -344,6 +350,7 @@ def run_sync(settings: Settings | None = None) -> dict:
 
         model = get_chat_model(settings)
         escalation_model = get_chat_model(settings, model_name=settings.llm_escalation_model)
+        agent_model = get_agent_model(settings)  # Groq hybrid, or None (falls back to escalation)
         client = GmailClient(settings)
         search_client = get_search_client(settings)
         langfuse_handler = get_langfuse_handler(settings)
@@ -367,6 +374,7 @@ def run_sync(settings: Settings | None = None) -> dict:
             gmail_client=client,
             search_client=search_client,
             escalation_model=escalation_model,
+            agent_model=agent_model,
             langfuse_handler=langfuse_handler,
         )
 
