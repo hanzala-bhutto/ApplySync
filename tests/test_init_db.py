@@ -2,11 +2,31 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from sqlmodel import select
+from sqlalchemy import inspect, text
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from applysync.db import repository as repo
 from applysync.db.init_db import get_engine, get_session, init_db
 from applysync.db.models import Application, PipelineRun, ReviewSuggestion
+
+
+def _make_application(session, company="Acme"):
+    return repo.create_application(
+        session,
+        company_name=company,
+        job_title="Engineer",
+        platform="linkedin",
+        applied_date=date(2026, 1, 1),
+        current_status="applied",
+    )
+
+
+def _alembic_version(db_path: Path) -> str | None:
+    engine = get_engine(db_path)
+    if "alembic_version" not in inspect(engine).get_table_names():
+        return None
+    with engine.connect() as conn:
+        return conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
 
 
 def test_init_db_creates_usable_tables(tmp_path: Path):
@@ -145,3 +165,54 @@ def test_init_db_migrates_existing_review_suggestion_missing_confidence(tmp_path
         assert old is not None
         assert old.message_id == "old-msg"
         assert old.confidence is None
+
+
+# --- Alembic management -----------------------------------------------------
+
+
+def test_init_db_fresh_database_is_alembic_managed_at_baseline(tmp_path: Path):
+    """A fresh database is built by the migrations and left recorded at the
+    baseline revision, so future `upgrade` calls know where it stands."""
+    db_path = tmp_path / "fresh.db"
+    init_db(db_path)
+
+    assert _alembic_version(db_path) == "0001"
+
+
+def test_init_db_is_idempotent_and_preserves_data(tmp_path: Path):
+    """Calling init_db again (every sync does) is a no-op that never errors and
+    never touches existing rows."""
+    db_path = tmp_path / "repeat.db"
+    init_db(db_path)
+    with get_session(db_path) as session:
+        _make_application(session)
+
+    init_db(db_path)  # second call
+
+    assert _alembic_version(db_path) == "0001"
+    with get_session(db_path) as session:
+        assert len(session.exec(select(Application)).all()) == 1
+
+
+def test_init_db_adopts_pre_alembic_database_without_recreating(tmp_path: Path):
+    """The real pre-Alembic applysync.db case: a database that already holds the
+    full current schema (via create_all) but has never been Alembic-managed.
+    init_db must stamp it in place - not try to recreate its tables (which would
+    error) - and keep every row."""
+    db_path = tmp_path / "legacy_full.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        _make_application(session, company="LegacyCo")
+    engine.dispose()
+
+    # No alembic_version yet: this is a pre-Alembic database.
+    assert _alembic_version(db_path) is None
+
+    init_db(db_path)  # adopt
+
+    assert _alembic_version(db_path) == "0001"
+    with get_session(db_path) as session:
+        rows = session.exec(select(Application)).all()
+        assert len(rows) == 1
+        assert rows[0].company_name == "LegacyCo"

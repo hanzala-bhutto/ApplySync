@@ -671,3 +671,29 @@ advanced the sync bookmark to the cancelled run's own start time, permanently
 hiding every not-yet-processed email from future syncs -
 `last_successful_run_started_at` now excludes any run with `errors` set, not just
 unfinished ones.
+
+## Infrastructure
+
+### Alembic schema migrations
+`docs/feasibility/alembic-migrations.md`. Replaced the "delete your local db to
+change the schema" pain (and the hand-rolled `_migrate_additive_columns` ALTER
+hack that only did `ADD COLUMN` on two hardcoded tables) with real Alembic
+migrations. SQLModel stays the model layer (SQLModel = SQLAlchemy + Pydantic);
+Alembic just versions the physical schema. `alembic/env.py` uses batch mode
+(SQLite can't ALTER in place), takes `SQLModel.metadata` as its target, reads the
+url from `settings.db_path` (overridable per run), and filters `include_name` to
+our own tables so autogenerate never tries to drop the LangGraph `SqliteSaver`
+checkpointer tables that live in the same `applysync.db`. `alembic/versions/
+0001_baseline.py` captures the current schema (verified to produce a table/column
+set identical to `create_all`). `db/init_db.py::init_db` now runs `alembic upgrade
+head`: a fresh db is built from migrations and stamped at baseline; a pre-Alembic
+db with real data is brought up to the baseline (via `create_all` for missing
+tables + a frozen legacy column bridge) and stamped in place, never recreated -
+so the real 237-application `applysync.db` is adopted without data loss. New
+`applysync db` CLI group (`upgrade`/`downgrade`/`current`/`history`/`revision`).
+Tests still use `SQLModel.metadata.create_all` for throwaway schemas
+(`tests/conftest.py`); `tests/test_init_db.py` gained coverage for the fresh-stamp,
+idempotency, and pre-Alembic-adoption paths. Pushback recorded in the feasibility
+report: "add SQLAlchemy" and "add DTOs" were already true (SQLModel is SQLAlchemy;
+17 Pydantic response models already exist), so the actual database refinement was
+migrations, not an ORM rewrite.
