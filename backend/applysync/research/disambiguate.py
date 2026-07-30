@@ -8,12 +8,14 @@ from email.utils import parsedate_to_datetime
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
+from applysync.config import get_settings
 from applysync.db import repository as repo
 from applysync.db.models import Application
 from applysync.gmail.models import RawEmail
 from applysync.pipeline.nodes import UNSPECIFIED_JOB_TITLE
 from applysync.pipeline.sanitize import INJECTION_GUARD, fence
 from applysync.pipeline.state import DisambiguationVerdict, JobApplicationEvent
+from applysync.prompts import get_prompt
 from applysync.search import SearxngError
 
 logger = logging.getLogger(__name__)
@@ -369,9 +371,10 @@ def run_disambiguation(
         bound = bound.with_fallbacks([fallback_model.bind_tools(tools)])
     bound = bound.with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
 
+    system_prompt_text = get_prompt("disambiguation_system", _SYSTEM_PROMPT, settings=get_settings())
     messages = [
         SystemMessage(
-            content=_SYSTEM_PROMPT.format(
+            content=system_prompt_text.format(
                 injection_guard=INJECTION_GUARD,
                 company=extracted.company_name,
                 job_title=extracted.job_title,

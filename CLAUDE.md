@@ -376,6 +376,24 @@ when a rule changes.
   schema" pain + the additive-column ALTER hack with real versioned migrations
   (`alembic/`, `0001` baseline, `applysync db` CLI); adopts the existing
   populated db without data loss. SQLModel stays the model layer.
+- **Langfuse prompt management**: all four hardcoded prompt constants
+  (`nodes._CLASSIFY_AND_EXTRACT_PROMPT`, `nodes._RELEVANCE_ONLY_PROMPT`,
+  `research/company.py::_RESEARCH_PROMPT`, `research/disambiguate.py::_SYSTEM_PROMPT`)
+  are now fetched at runtime via `applysync/prompts.py::get_prompt(name,
+  local_fallback, settings)` from Langfuse's Prompt Management (name + `production`
+  label), with the local constant kept in the code as the fallback text - both
+  the Langfuse SDK's own fetch-fails path and a wrapper try/except around client
+  construction return it whenever Langfuse is unset, unreachable, or missing that
+  prompt, same "diagnostic, never load-bearing" posture as tracing. Prompts still
+  use single-curly-brace `{name}` placeholders formatted with plain `str.format()`
+  at the call site, not Langfuse's own double-brace `compile()`.
+  `backend/scripts/seed_langfuse_prompts.py` creates/versions the four prompts in
+  a running Langfuse instance from the current local constants (idempotent, safe
+  to re-run); a fresh Langfuse instance needs this run once before it has
+  anything to serve. Prompt iteration is now: edit in the Langfuse UI, publish a
+  new version under `production` - no code change/PR/redeploy required, with the
+  eval harness (`eval/run_eval.py`) still the gate for trusting any prompt change
+  regardless of where the text lives.
 
 ### Not built yet
 
@@ -418,20 +436,6 @@ merged into `Application`. Ordered by dependency:
       company/domain, auto-accept high-confidence ones, and surface only the
       genuinely ambiguous. New `confidence` field on `ReviewSuggestion`. Directly
       targets the false-positive-flood pain (the "528 suggestions" commit).
-
-- [ ] **Prompt management via Langfuse.** All prompts (`nodes._CLASSIFY_AND_EXTRACT_PROMPT`,
-      `nodes._RELEVANCE_ONLY_PROMPT`, `research/company.py::_RESEARCH_PROMPT`,
-      `research/disambiguate.py::_SYSTEM_PROMPT`) are hardcoded Python string
-      constants today. Langfuse (already self-hosted for tracing, see M5) also
-      has a Prompt Management feature - versioned prompts with labels
-      (`production`/`staging`/etc.), fetched at runtime instead of baked into
-      the code. Move these four onto it: create/version each prompt in
-      Langfuse, fetch by name+label in the node/agent that uses it, fall back
-      to the last-known-good local copy if Langfuse is unreachable (same
-      never-load-bearing posture as tracing - a missing Langfuse instance must
-      not break a sync). This directly unblocks iterating on prompts (the
-      fragile-to-change area called out in the LLM section above) without a
-      code change + PR + redeploy for every wording tweak.
 
 - [ ] **M4: Scheduler/automation** - explicitly NOT the same as the manual "Sync
       Now" button above: an in-process APScheduler tied to the FastAPI app (the

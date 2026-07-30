@@ -15,6 +15,7 @@ from applysync.db import repository as repo
 from applysync.gmail.models import RawEmail
 from applysync.gmail.query_builder import guess_platform
 from applysync.pipeline.sanitize import INJECTION_GUARD, fence
+from applysync.prompts import get_prompt
 from applysync.pipeline.state import (
     ClassifyAndExtractResult,
     EmailState,
@@ -260,7 +261,8 @@ def make_scrutinize_relevance_node(model, sources: SourcesConfig, *, escalation_
             f"From: {email.sender}\nSubject: {email.subject}\n\nBody (truncated):\n{email.body[:1000]}",
             "untrusted_email",
         )
-        prompt = _RELEVANCE_ONLY_PROMPT.format(
+        prompt_text = get_prompt("relevance_only", _RELEVANCE_ONLY_PROMPT, settings=get_settings())
+        prompt = prompt_text.format(
             injection_guard=INJECTION_GUARD, email_block=email_block
         )
         try:
@@ -314,7 +316,10 @@ def make_classify_and_extract_node(model, sources: SourcesConfig, *, escalation_
             f"From: {email.sender}\nSubject: {email.subject}\n\nBody:\n{email.body[:4000]}",
             "untrusted_email",
         )
-        prompt = _CLASSIFY_AND_EXTRACT_PROMPT.format(
+        prompt_text = get_prompt(
+            "classify_and_extract", _CLASSIFY_AND_EXTRACT_PROMPT, settings=get_settings()
+        )
+        prompt = prompt_text.format(
             platform_hint=platform_hint or "unknown",
             injection_guard=INJECTION_GUARD,
             email_block=email_block,

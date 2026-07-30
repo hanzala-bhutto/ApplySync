@@ -7,7 +7,9 @@ from langchain_core.messages import HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 
+from applysync.config import get_settings
 from applysync.pipeline.sanitize import INJECTION_GUARD, fence
+from applysync.prompts import get_prompt
 from applysync.search import SearchResult, SearxngClient, SearxngError
 
 logger = logging.getLogger(__name__)
@@ -110,7 +112,8 @@ def research_company(
         # one. The caller still caches it so we don't hammer a dead query.
         return CompanyProfileResult(), []
 
-    prompt = _RESEARCH_PROMPT.format(
+    prompt_text = get_prompt("company_research", _RESEARCH_PROMPT, settings=get_settings())
+    prompt = prompt_text.format(
         injection_guard=INJECTION_GUARD,
         company=display_name,
         results=_format_results(results),
