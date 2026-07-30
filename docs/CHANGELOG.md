@@ -697,3 +697,28 @@ idempotency, and pre-Alembic-adoption paths. Pushback recorded in the feasibilit
 report: "add SQLAlchemy" and "add DTOs" were already true (SQLModel is SQLAlchemy;
 17 Pydantic response models already exist), so the actual database refinement was
 migrations, not an ORM rewrite.
+
+### Langfuse prompt management
+`docs/feasibility/langfuse-prompt-management.md`. Moved all four hardcoded
+prompt string constants (`nodes._CLASSIFY_AND_EXTRACT_PROMPT`,
+`nodes._RELEVANCE_ONLY_PROMPT`, `research/company.py::_RESEARCH_PROMPT`,
+`research/disambiguate.py::_SYSTEM_PROMPT`) onto Langfuse's Prompt Management,
+the self-hosted instance's other feature besides tracing (see M5). New
+`applysync/prompts.py::get_prompt(name, local_fallback, settings, label)`
+fetches by name + `production` label; the local constant is kept in the code
+as the fallback text, returned whenever Langfuse's keys are unset, the client
+can't be constructed, or the fetch itself fails (the Langfuse SDK's own
+`get_prompt(..., fallback=...)` handles the latter, with a wrapping try/except
+around client construction for everything else) - same never-load-bearing
+posture as tracing, verified live by pointing settings at an unreachable host
+and at unset keys, both returning the fallback text unchanged. Prompts keep
+their existing single-curly-brace `{name}` placeholders, formatted with plain
+`str.format()` at the call site, not Langfuse's own double-brace `compile()`.
+New `backend/scripts/seed_langfuse_prompts.py` creates/versions the four
+prompts in a running Langfuse instance from the current local constants
+(idempotent - re-running with unchanged text creates no new version); run once
+against the actual self-hosted instance and confirmed the fetch path returns
+byte-identical text to the local constant. All 261 existing tests pass
+unchanged: CI never has real Langfuse keys (`.env` is gitignored), so the
+fail-open path is exercised deterministically there, same as the existing
+tracing dependency override in `tests/conftest.py`.
