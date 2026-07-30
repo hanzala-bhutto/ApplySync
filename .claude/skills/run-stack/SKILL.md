@@ -1,77 +1,97 @@
 ---
 name: run-stack
-description: Give the exact commands to bring up ApplySync's full local stack (SearXNG, Langfuse, backend API, frontend dashboard) each in its own terminal. Use when the user wants to run/start the whole app, not just one piece of it.
+description: Actually launch ApplySync's full local stack (SearXNG, Langfuse, backend API, frontend dashboard) as tracked background tasks. Use when the user wants to run/start/spin up the whole app, not just get the commands for it.
 ---
 
 # Running the full ApplySync stack
 
-This project's dev servers are **never started or backgrounded via Claude
-Code's own tools** (`CLAUDE.md` hard constraint - Windows ghost-listener pain
-on ports 8000/5173 from a past session). This skill's job is to hand the user
-the exact commands for each piece, in the order to run them, each in its own
-terminal window they own. Don't run any of the long-running commands below
-yourself; a one-off check (`curl`, `applysync search "..."` as a smoke test)
-is fine.
+**This skill is a sanctioned, explicit exception to CLAUDE.md's general
+"don't background dev servers" rule**, agreed with the user after they
+confirmed they want `/run-stack` to actually start the stack, not just print
+commands. The original rule exists because of real Windows ghost-listener
+pain (orphaned processes still holding ports 8000/5173 with no tracked
+process behind them). This skill mitigates that risk instead of ignoring it:
+every long-running process it starts MUST go through the Bash tool's
+`run_in_background`, never a raw detached/nohup spawn, so it stays tracked
+and stoppable. Do not use this launch method anywhere else in the project;
+outside this skill, the original hard constraint (hand the user commands,
+let them run it themselves) still applies.
+
+## 0. Pre-flight: check for stale listeners first
+
+Before starting anything, check whether ports 8000 (backend) and 5173
+(frontend) are already in use:
+
+```
+netstat -ano | grep -E ":8000 |:5173 "
+```
+
+If a port is already listening, do NOT start a second instance on it - that's
+exactly how a ghost listener gets created (two processes racing for one
+port). Tell the user what's already there and ask whether to reuse it, or
+have them kill it first, before proceeding.
 
 ## Pieces and order
 
-Not every piece is required every time - pick based on what the user needs.
+Not every piece is required every time - ask or infer from context which
+ones are actually needed (frontend work needs the frontend; a Gmail-only
+pipeline change needs just the backend; research features need SearXNG).
 
-1. **SearXNG** (optional - only needed for web-research features: company
-   research card, entity resolution, future follow-up/dossier features).
-   Docker must already be running.
+1. **SearXNG** (optional - web-research features only). Docker must be
+   running. This one is detached and Docker-managed already, safe to run
+   directly (not via `run_in_background`, it returns immediately):
    ```
-   cd searxng
-   docker compose up -d
+   cd searxng && docker compose up -d
    ```
-   Detached/Docker-managed, so this one command is enough - no terminal needs
-   to stay open for it. Verify: `applysync search "egym careers"`.
 
-2. **Langfuse** (optional - only needed for tracing/observability). Also
-   Docker-managed and detached.
+2. **Langfuse** (optional - tracing/observability only). Same story, Docker
+   detaches it on its own:
    ```
-   cd langfuse
-   docker compose up -d
+   cd langfuse && docker compose up -d
    ```
    First run only: open `http://localhost:3000`, sign up locally, create a
-   project, copy its API keys into the root `.env`
-   (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST`). Tracing is
-   diagnostic only - a missing/misconfigured instance never blocks a sync.
+   project, put its API keys in the root `.env`.
 
-3. **Backend API** (required for the dashboard). Give the user this to run
-   in its own terminal, with the venv activated:
+3. **Backend API** (needed for the dashboard). Launch via Bash tool with
+   `run_in_background: true` so it's tracked, not orphaned:
    ```
    applysync serve --reload
    ```
-   Serves the FastAPI JSON API + triggers syncs from the dashboard.
+   (venv must be active in that shell - activate it as part of the same
+   background command if it isn't already, e.g.
+   `.venv\Scripts\activate && applysync serve --reload`.)
 
-4. **Frontend dashboard** (required for the dashboard). Separate terminal:
+4. **Frontend dashboard** (needed for the dashboard). Also
+   `run_in_background: true`:
    ```
-   cd frontend
-   npm run dev
+   cd frontend && npm run dev
    ```
-   Runs the Vite dev server as its own process, by design (not unified
-   single-command serving - an explicit project choice).
 
-## What to tell the user
+## After launching
 
-Lay out only the pieces relevant to what they asked for, in the order above,
-each as a command to paste into its own terminal (steps 1-2 are detached and
-don't need a dedicated terminal left open; steps 3-4 do). Don't just print a
-block of commands with no explanation - name which terminal/piece each one
-is, and mention any first-run setup (Langfuse API keys, Gmail OAuth via
-`.claude/skills/gmail-setup/SKILL.md`) if it looks like this is a fresh
-machine.
+- Report the task IDs/handles for the backend and frontend background tasks
+  back to the user so they know these exist and how to check on them.
+- Verify each piece actually came up (don't just assume the background task
+  starting means the server is ready):
+  - Backend: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/applications` (with a short `--max-time`), expect a real HTTP status, not a connection failure.
+  - Frontend: check the background task's output for the Vite "Local:" URL line.
+  - SearXNG: `http://localhost:8888`.
+  - Langfuse: `http://localhost:3000`.
+- Tell the user explicitly these are now running as tracked background
+  tasks in this session, and that closing/ending the session (or an explicit
+  stop request) is what should stop them - don't leave this ambiguous.
 
-## Verifying it's up
+## Stopping the stack
 
-- Backend: `curl http://localhost:8000/api/applications` (or whatever port
-  `applysync serve` reports) should return JSON, not a connection error.
-- Frontend: Vite prints the local URL (typically `http://localhost:5173`) to
-  its own terminal on startup.
-- SearXNG: `http://localhost:8888`.
-- Langfuse: `http://localhost:3000`.
+Stop the backend/frontend background tasks explicitly (via the task-stop
+tool) when the user asks to stop the stack, or before starting a fresh copy
+of the same piece - never start a second instance on the same port. `docker
+compose down` in `searxng/`/`langfuse/` for those two if the user wants them
+fully stopped (otherwise they're fine left running detached).
 
-If something looks broken, check first whether a stale process is already
-holding the port (the exact ghost-listener failure mode this skill's
-no-backgrounding rule exists to avoid) before assuming it's an app bug.
+## If something looks broken
+
+Check first whether a stale process is already holding the port before
+assuming it's an app bug - the pre-flight check in step 0 exists precisely
+to catch this before it happens, but re-check it if something looks wrong
+mid-session.

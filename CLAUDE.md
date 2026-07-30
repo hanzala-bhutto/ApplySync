@@ -67,6 +67,14 @@ each session.
   `npm run dev` in `frontend/`) and let them run each in their own terminal.
   A single one-off command to check something (curl, a quick TestClient
   call, `npm run build`) is fine; a long-running dev server is not.
+  **Sanctioned exception**: `/run-stack` (`.claude/skills/run-stack/SKILL.md`)
+  is explicitly allowed to background the backend/frontend, per the user's
+  2026-07-30 request that the skill actually launch the stack rather than
+  just print commands - but only via the tool's tracked
+  `run_in_background`, only after a pre-flight port check to avoid racing a
+  second process onto an already-listening port, and it must be stopped
+  explicitly rather than left to orphan. Outside that one skill, this rule
+  is unchanged.
 
 ## Architecture
 
