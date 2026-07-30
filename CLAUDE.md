@@ -411,6 +411,20 @@ merged into `Application`. Ordered by dependency:
       genuinely ambiguous. New `confidence` field on `ReviewSuggestion`. Directly
       targets the false-positive-flood pain (the "528 suggestions" commit).
 
+- [ ] **Prompt management via Langfuse.** All prompts (`nodes._CLASSIFY_AND_EXTRACT_PROMPT`,
+      `nodes._RELEVANCE_ONLY_PROMPT`, `research/company.py::_RESEARCH_PROMPT`,
+      `research/disambiguate.py::_SYSTEM_PROMPT`) are hardcoded Python string
+      constants today. Langfuse (already self-hosted for tracing, see M5) also
+      has a Prompt Management feature - versioned prompts with labels
+      (`production`/`staging`/etc.), fetched at runtime instead of baked into
+      the code. Move these four onto it: create/version each prompt in
+      Langfuse, fetch by name+label in the node/agent that uses it, fall back
+      to the last-known-good local copy if Langfuse is unreachable (same
+      never-load-bearing posture as tracing - a missing Langfuse instance must
+      not break a sync). This directly unblocks iterating on prompts (the
+      fragile-to-change area called out in the LLM section above) without a
+      code change + PR + redeploy for every wording tweak.
+
 - [ ] **M4: Scheduler/automation** - explicitly NOT the same as the manual "Sync
       Now" button above: an in-process APScheduler tied to the FastAPI app (the
       original plan) only ticks while `applysync serve` happens to be running,
@@ -447,3 +461,5 @@ Invoke these instead of re-deriving the same context from scratch:
 - `/code-review`: project-specific review checklist (idempotency,
   credential/PII handling, schema/migration safety, prompt/schema drift).
 - `/gmail-setup`: one-time Gmail OAuth setup walkthrough.
+- `/run-stack`: exact commands to bring up the full local stack (SearXNG,
+  Langfuse, backend, frontend), each in its own terminal the user owns.
