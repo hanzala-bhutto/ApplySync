@@ -67,6 +67,14 @@ each session.
   `npm run dev` in `frontend/`) and let them run each in their own terminal.
   A single one-off command to check something (curl, a quick TestClient
   call, `npm run build`) is fine; a long-running dev server is not.
+  **Sanctioned exception**: `/run-stack` (`.claude/skills/run-stack/SKILL.md`)
+  is explicitly allowed to background the backend/frontend, per the user's
+  2026-07-30 request that the skill actually launch the stack rather than
+  just print commands - but only via the tool's tracked
+  `run_in_background`, only after a pre-flight port check to avoid racing a
+  second process onto an already-listening port, and it must be stopped
+  explicitly rather than left to orphan. Outside that one skill, this rule
+  is unchanged.
 
 ## Architecture
 
@@ -411,6 +419,20 @@ merged into `Application`. Ordered by dependency:
       genuinely ambiguous. New `confidence` field on `ReviewSuggestion`. Directly
       targets the false-positive-flood pain (the "528 suggestions" commit).
 
+- [ ] **Prompt management via Langfuse.** All prompts (`nodes._CLASSIFY_AND_EXTRACT_PROMPT`,
+      `nodes._RELEVANCE_ONLY_PROMPT`, `research/company.py::_RESEARCH_PROMPT`,
+      `research/disambiguate.py::_SYSTEM_PROMPT`) are hardcoded Python string
+      constants today. Langfuse (already self-hosted for tracing, see M5) also
+      has a Prompt Management feature - versioned prompts with labels
+      (`production`/`staging`/etc.), fetched at runtime instead of baked into
+      the code. Move these four onto it: create/version each prompt in
+      Langfuse, fetch by name+label in the node/agent that uses it, fall back
+      to the last-known-good local copy if Langfuse is unreachable (same
+      never-load-bearing posture as tracing - a missing Langfuse instance must
+      not break a sync). This directly unblocks iterating on prompts (the
+      fragile-to-change area called out in the LLM section above) without a
+      code change + PR + redeploy for every wording tweak.
+
 - [ ] **M4: Scheduler/automation** - explicitly NOT the same as the manual "Sync
       Now" button above: an in-process APScheduler tied to the FastAPI app (the
       original plan) only ticks while `applysync serve` happens to be running,
@@ -447,3 +469,5 @@ Invoke these instead of re-deriving the same context from scratch:
 - `/code-review`: project-specific review checklist (idempotency,
   credential/PII handling, schema/migration safety, prompt/schema drift).
 - `/gmail-setup`: one-time Gmail OAuth setup walkthrough.
+- `/run-stack`: exact commands to bring up the full local stack (SearXNG,
+  Langfuse, backend, frontend), each in its own terminal the user owns.
