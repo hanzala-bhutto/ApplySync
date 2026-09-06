@@ -9,15 +9,19 @@ An email-driven job application tracker that pulls your applications out of your
 - [Features](#features)
 - [Screenshots](#screenshots)
 - [Architecture](#architecture)
-- [LangGraph Decision Making](#langgraph-decision-making)
 - [Data Flow](#data-flow)
 - [Setup](#setup)
 - [LLMOps](#llmops)
-- [Local Model Experiment](#local-model-experiment-8gb-vram)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
+
+Deeper detail lives alongside the code: pipeline branching internals in
+[`docs/pipeline-internals.md`](docs/pipeline-internals.md), the AI-engineering
+scorecard in [`docs/llmops-scorecard.md`](docs/llmops-scorecard.md), one-off
+experiments in [`docs/experiments/`](docs/experiments/), and full milestone
+history in `CLAUDE.md`.
 
 ## Motivation
 
@@ -39,24 +43,19 @@ Job hunting across LinkedIn, Indeed, StepStone, direct company career pages, and
 
 What is actually working today:
 
-- **Gmail ingestion** with a readonly OAuth flow (never write or send scopes), either via the CLI's first-run consent or a "Connect Gmail" button in the dashboard that walks through Google's consent screen and back
-- **Platform-agnostic, keyword-driven search**: application-related emails are found by subject phrase and keyword (`backend/config/sources.yaml`'s `confirmation_keywords`), not a hardcoded sender allowlist, so ATS vendors and direct company emails that were never explicitly added still get picked up
-- **Concurrent Gmail fetch**: per-message bodies are fetched with a worker thread pool rather than one at a time
-- **A LangGraph extraction pipeline**, one email per graph invocation:
-  - `scrutinize_relevance`: a hybrid heuristic + cheap-LLM filter that rejects job-alert digests and recommendation emails before they ever reach the expensive extraction call, escalating to a larger model only for the rare genuinely ambiguous subject
-  - `classify_and_extract`: one merged LLM call classifies relevance and extracts structured fields (company, job title, status, location, salary, URL), with one escalation-model retry if the fast call fails outright or returns no usable company name
-  - `match_existing_application`: heuristic company/title/platform matching decides new vs. update vs. duplicate - normalized for case, whitespace, legal suffixes ("SE"/"GmbH"/"Inc"), and gender/diversity qualifiers ("(m/f/d)"), plus **fuzzy company-name matching** (typo and word-add tolerant, e.g. "EGYM" vs "EGYM SE" vs a one-character typo) that always routes through the disambiguation agent rather than auto-merging
-  - `disambiguate_match`: a hand-rolled LLM tool-calling agent (not a fixed graph node) for the genuinely ambiguous case - same company, no exact title match. It inspects a candidate's status history and source email, can check the company's real-world identity via web search, and must gather actual evidence before it's allowed to submit a merge verdict (a same-application/duplicate decision is rejected outright if the agent never looked at that candidate first) - fails open to a new (recoverable) row rather than ever risking a silent wrong merge. Date comparisons between candidate emails are computed in Python and handed to the model as an explicit annotation ("5 days AFTER the new email"), not left to the model's own arithmetic - an LLM-as-judge audit found this was the single largest source of real disambiguation errors. Similarly, when the new email and exactly one candidate share an ATS requisition ID, that same-posting case is resolved deterministically in Python before the model runs at all. The agent optionally runs on Groq with automatic fallback to NVIDIA, keeping its slow multi-turn tool loop off NVIDIA's shared extraction rate budget
-  - `upsert_db`: deterministic persistence, no LLM involved
-- **Idempotent processing**: every email is tracked by Gmail message id so re-runs never reprocess or duplicate the same email; a run's incremental progress (emails scrutinized/extracted/written) is persisted as it happens, not just once the run finishes
-- **Status tracking across the full application lifecycle**: applied, viewed, assessment, interview, rejected, offer, declined (manual-only, for offers you turn down yourself), and other
-- **A React dashboard**: a status-board (Kanban) view with drag-and-drop status correction (keyboard-operable via `@dnd-kit`), inline field editing, a "reprocess from source email" action, per-application timelines with the original source email viewable inline, follow-up reminders, and a per-platform response-rate breakdown - all served by a FastAPI JSON API with a full OpenAPI schema
-- **Manual "Sync Now"** button and a dedicated `/sync` page with a staged progress view (ingestion/scrutiny/extraction/write), a live pipeline-flow graph that mirrors the actual LangGraph structure and animates node-by-node as a real sync runs (SSE-driven, diagnostic only), a Stop button for cancelling an in-progress run, and recent-run history, plus the equivalent `applysync sync` CLI command
-- **Full Audit**: re-runs today's extraction logic against every email ever seen (not just new ones) to catch drift from a prompt/model change; never writes directly, every disagreement becomes a reviewable suggestion on the `/review` page
-- **Best-effort platform attribution** for dashboard labeling (LinkedIn, Indeed, StepStone, SmartRecruiters, Personio, Ashby, and more), configured entirely in `backend/config/sources.yaml`
-- **Company research card**: an on-demand "research this company" action on the detail page that pulls a grounded profile (summary, industry, size, HQ, website, recent news) from live web results via the self-hosted SearXNG layer. Web-sourced and clearly labeled as such, kept strictly separate from email-extracted data, with source links for verification and a cached-and-shared profile per company
-- **Reliability tooling** (see `CLAUDE.md`'s M5 milestone for full detail): a hand-labeled eval harness (real emails, human-verified labels, per-stage accuracy metrics - scrutiny false-reject rate, classification accuracy, per-field extraction accuracy) that gates prompt/model changes before they ship, plus self-hosted Langfuse tracing every node and agent tool loop of a real sync for after-the-fact debugging, with a flagged-trace-to-eval-sample feedback loop
-- **Playwright end-to-end tests** with an `@axe-core/playwright` accessibility check on every page
+- **Gmail ingestion** over a readonly OAuth flow (never write/send scopes), via CLI first-run consent or a dashboard "Connect Gmail" button.
+- **Platform-agnostic, keyword-driven search**: emails are found by subject/keyword (`backend/config/sources.yaml`), not a sender allowlist, so unknown ATS vendors and direct company emails still get picked up.
+- **Concurrent Gmail fetch** via a worker thread pool.
+- **A LangGraph extraction pipeline**, one email per graph invocation: a heuristic + cheap-LLM `scrutinize_relevance` filter, a merged `classify_and_extract` call (company, title, status, location, salary, URL), heuristic + fuzzy `match_existing_application`, an LLM tool-calling `disambiguate_match` agent for the ambiguous same-company case, and deterministic `upsert_db` persistence. See [Architecture](#architecture) and [`docs/pipeline-internals.md`](docs/pipeline-internals.md).
+- **Idempotent processing**: every email is tracked by Gmail message id so re-runs never duplicate work; per-run progress is persisted incrementally as it happens.
+- **Full application-lifecycle status tracking**: applied, viewed, assessment, interview, rejected, offer, declined (manual-only), and other.
+- **A React dashboard**: Kanban status board with keyboard-operable drag-and-drop status correction, inline editing, "reprocess from source email", per-application timelines with the source email viewable inline, follow-up reminders, and a per-platform response-rate breakdown, all over a FastAPI JSON API with a full OpenAPI schema.
+- **Manual "Sync Now"** and a `/sync` page with staged progress, a live pipeline-flow graph animated node-by-node (SSE, diagnostic only), a Stop button, and run history, plus the `applysync sync` CLI.
+- **Full Audit**: re-runs today's extraction over every email ever seen to catch prompt/model drift; never writes directly, every disagreement becomes a reviewable suggestion on `/review`.
+- **Best-effort platform attribution** for dashboard labeling (LinkedIn, Indeed, StepStone, SmartRecruiters, Personio, Ashby, and more), configured in `backend/config/sources.yaml`.
+- **Company research card**: on-demand grounded company profile (summary, industry, size, HQ, website, recent news) from live web results via self-hosted SearXNG, clearly labeled web-sourced and kept strictly separate from email-extracted data, with source links and per-company caching.
+- **Reliability tooling**: a hand-labeled eval harness with per-stage accuracy metrics that gates prompt/model changes, plus self-hosted Langfuse tracing with a flagged-trace-to-eval-sample feedback loop. See [LLMOps](#llmops).
+- **Playwright end-to-end tests** with an `@axe-core/playwright` accessibility check on every page.
 
 Not built yet, see [Roadmap](#roadmap): automatic/scheduled syncing and confidence-routed merge review.
 
@@ -92,111 +91,66 @@ example data ("Acme Corp", "Globex"), not a real inbox. Regenerate with
 
 ## Architecture
 
-```
-[Gmail API] --(poll, keyword-filtered query, concurrent fetch)--> gmail/client.py
-                                                                          |
-                                                                raw email batch
-                                                                          v
-                                    LangGraph pipeline: pipeline/graph.py (one email per invocation)
-   scrutinize_relevance -> classify_and_extract -> match_existing_application -+-> upsert_db
-        (heuristic + cheap/escalation LLM)  (merged classify+extract,           |     ^
-                                             + escalation retry)     ambiguous: |     |
-                                                                                v     |
-                                                              disambiguate_match ------
-                                                              (LLM tool-calling agent:
-                                                               status history, source
-                                                               email, web identity check)
-                                                                          |
-                                                                          v
-                                                    SQLite: db/models.py + repository.py
-                                                                          |
-                                                                          v
-                                                     FastAPI JSON API (web/api.py, /api/*)
-                                                                          |
-                                                                          v
-                                                    React frontend (frontend/, separate dev server)
+Ingestion feeds a per-email LangGraph pipeline, which persists to SQLite behind a
+FastAPI JSON API that the React dashboard renders:
 
-              Manual trigger: POST /api/sync -> background thread runs the pipeline once
-              [Not yet built] Scheduler: an OS-level scheduled task -> `applysync sync` daily
-              Self-hosted Langfuse (langfuse/, docker-compose) traces every node and
-              agent tool loop of a sync; diagnostic only, never load-bearing
+```mermaid
+flowchart TD
+    Gmail["Gmail API<br/>(keyword query, readonly)"] -->|concurrent fetch| Client["gmail/client.py"]
+    Client --> Batch["raw email batch"]
+    Batch --> Pipeline["LangGraph pipeline<br/>pipeline/graph.py<br/>(one email per invocation)"]
+    Pipeline --> DB[("SQLite<br/>db/models.py + repository.py")]
+    DB --> API["FastAPI JSON API<br/>web/api.py, /api/*"]
+    API --> UI["React frontend<br/>(separate dev server)"]
 ```
 
-`fetch_emails` is a plain batch fetch, not a graph node - the graph operates on one email at a time, driven by a loop in `process_emails`. An email that fails scrutiny, isn't a genuine application confirmation, or can't be confidently extracted is routed to a short-circuit terminal node that marks it processed without creating any application/event rows, so it is recorded once and never retried, while the reason it was skipped is kept.
+A sync is triggered manually (`POST /api/sync` runs the pipeline once on a
+background thread, or the `applysync sync` CLI); scheduled syncing is
+[not yet built](#roadmap). Self-hosted Langfuse (`langfuse/`) optionally traces
+every node and agent tool loop of a sync; it is diagnostic only, never
+load-bearing. `fetch_emails` is a plain batch fetch, not a graph node: the graph
+runs on one email at a time, driven by a loop in `process_emails`.
 
-## LangGraph Decision Making
+Inside the graph, conditional edges route each email to `upsert_db` or to one of
+three short-circuit `mark_*` terminal nodes (marked processed, no rows written)
+so a skipped email is recorded once and never retried:
 
-The Architecture diagram above shows the happy path. This section shows the actual branching logic inside the compiled `StateGraph` (`pipeline/graph.py`) - every conditional edge, the exact field it checks, and where each branch terminates:
-
-```
-+------------------------------+
-|     scrutinize_relevance     |   entry point - heuristic string match;
-+------------------------------+   LLM call only if ambiguous (fails open to "pass")
-              |
-              |---- scrutiny == "reject" ----> +------------------------+
-              |                                | mark_scrutiny_rejected |  --> END
-              |                                +------------------------+
-              v   scrutiny == "pass"
-+------------------------------+
-|     classify_and_extract     |   always 1 LLM call (ClassifyAndExtractResult)
-+------------------------------+
-              |
-              |---- extracted is None, classification == "irrelevant" ------> +-----------------+
-              |                                                               | mark_irrelevant |  --> END
-              |                                                               +-----------------+
-              |
-              |---- extracted is None, else (LLM error / missing fields) ---> +------------------------+
-              |                                                               | mark_extraction_failed |  --> END
-              |                                                               +------------------------+
-              v   extracted is not None
-+------------------------------+
-|  match_existing_application  |   DB heuristic match (company+title+platform,
-+------------------------------+   with fuzzy company matching), no LLM
-              |
-              |---- match is None, candidate_ids set, agent available -----> +--------------------+
-              |     (ambiguous: same company - exact or fuzzy - no            | disambiguate_match |
-              |      exact title match)                                      +--------------------+
-              |                                                                        |
-              v   match is not None (resolved: exact company+title,                    |
-              |   or no agent/candidates: clear new_application)                       |
-+------------------------------+                                                       |
-|          upsert_db           |  <------------------------------------------------------
-+------------------------------+   deterministic: insert new Application or append StatusEvent
-              |
-              v
-             END
+```mermaid
+flowchart TD
+    S["scrutinize_relevance"] -->|reject| MSR["mark_scrutiny_rejected"] --> E1(["END"])
+    S -->|pass| CE["classify_and_extract"]
+    CE -->|classified irrelevant| MI["mark_irrelevant"] --> E2(["END"])
+    CE -->|LLM error / missing company| MEF["mark_extraction_failed"] --> E3(["END"])
+    CE -->|extracted| M["match_existing_application"]
+    M -->|ambiguous: same company, no exact title| D["disambiguate_match<br/>(LLM tool-calling agent)"]
+    M -->|resolved, or clear new_application| U["upsert_db"]
+    D -. "tool-calling loop, &le;8 turns<br/>(internal to the node)" .-> D
+    D --> U
+    U --> E4(["END"])
 ```
 
-What each conditional edge actually checks:
-
-- **`scrutinize_relevance` -> `scrutiny`** (`"pass"` / `"reject"`): a pure heuristic (subject/body string matching against known digest markers and confirmation phrases) resolves most emails with zero LLM calls; only a genuinely ambiguous subject triggers one `RelevanceOnlyResult` LLM call, escalated to the larger model.
-- **`classify_and_extract` -> `_route()`** on `extracted` and `classification`: `extracted is not None` routes to matching; `extracted is None` splits again on whether the model classified the email as `"irrelevant"` versus a genuine failure (LLM error, or missing `company_name` - the latter gets one escalation-model retry before failing).
-- **`match_existing_application` -> `_route_match()`** on `match`/`candidate_ids`: an exact company+title hit resolves immediately (`match` set, straight to `upsert_db`); no company match at all is a clear `new_application`; a company match (exact *or* fuzzy) with no exact title match leaves `match` unset and `candidate_ids` populated, routing to `disambiguate_match` when the agent's dependencies (`gmail_client`/`search_client`) are wired in, or falling open to `new_application` when they aren't (unit tests, a degraded run).
-
-All three `mark_*` nodes (`mark_scrutiny_rejected`, `mark_irrelevant`, `mark_extraction_failed`) are the same `make_skip_node` factory, parameterized only by the `classification` string they record - each just calls `repo.mark_processed` and writes no `Application`/`StatusEvent` rows, so a skipped email is recorded once and never retried, while the reason it was skipped is preserved for later inspection.
-
-`match_existing_application`'s `MatchDecision.action` (`new_application` vs. `update_existing` vs. `duplicate_skip`) branches *inside* `upsert_db` rather than as a graph-level conditional edge - deciding whether to insert a new `Application`, append a `StatusEvent` to an existing one, or write nothing, but not changing which node runs next.
-
-`full_audit.py` (used by the dashboard's "Full Audit" review flow, renamed from `full_scan.py` since it never writes directly - see the Roadmap) reuses `scrutinize_relevance` and `classify_and_extract` as plain Python functions with its own manual branching to produce `ReviewSuggestion` rows for human approval - it does not build or run a `StateGraph`, so it isn't part of this diagram.
-
-### Mostly a workflow, with one narrow agentic exception
-
-Every *graph-level* branch above is a plain Python conditional reading a state field (`scrutiny`, or `_route()`/`_route_match()` on `extracted`/`classification`/`match`) - no LLM decides which node runs next, and the routing itself is deterministic code. That is a deliberate fit for the well-known outcomes (relevant/irrelevant, new/update/duplicate), where a fixed graph is easier to test and reason about than an agent would be.
-
-The one deliberate exception is `disambiguate_match`: for the genuinely ambiguous case (same company, no exact title match), an LLM tool-calling agent - not a fixed sequence of steps - chooses which evidence to gather (status history, source email, a web identity check) and loops until it's ready to submit a verdict. This is a narrow, contained use of agentic behavior exactly where the outcome genuinely can't be predicted in advance, with a hard safety rail: a merge verdict is rejected outright unless the agent actually gathered evidence for that specific candidate first, and any agent failure fails open to a new (recoverable) row rather than a silent wrong merge. The company research card (and further research features on the [Roadmap](#roadmap)) are the other place this project uses genuinely agentic, tool-choosing behavior, outside the graph entirely.
+Every graph-level branch is deterministic Python reading a state field; no LLM
+chooses the next node. The one agentic exception is `disambiguate_match`: the
+dotted self-loop is *inside* the node (the LangGraph graph itself has no cycle) -
+a hand-rolled ReAct loop where the LLM repeatedly picks a tool (status history,
+source email, web identity check), reads the result, and loops until it submits a
+verdict or hits the 8-turn cap, failing open to a new row on any error. The exact
+per-edge conditions, that internal loop, the skip-node factory, and the
+workflow-vs-agent rationale are documented in
+[`docs/pipeline-internals.md`](docs/pipeline-internals.md).
 
 ## Data Flow
 
 Following one email through the system, function by function:
 
-1. `run_sync` (`pipeline/graph.py`) builds a Gmail search query from `backend/config/sources.yaml`'s keywords, bounded by the last successful run's date (with a small lookback buffer), and calls `GmailClient.fetch_messages` (`gmail/client.py`) to pull the raw batch concurrently.
-2. `process_emails` filters out anything already in the `processed_emails` table (the idempotency guard), then invokes the compiled LangGraph once per remaining email via `compiled.stream(...)`.
-3. `scrutinize_relevance` (`pipeline/nodes.py`) runs a heuristic first (instant reject on known digest markers, instant pass on the original narrow confirmation phrases); only a genuinely ambiguous email triggers one cheap `RelevanceOnlyResult` LLM call. A reject routes straight to `mark_scrutiny_rejected` and the email is marked processed without further work.
-4. `classify_and_extract` sends the email through one structured-output LLM call (`ClassifyAndExtractResult`) that both classifies relevance and extracts `company_name`, `job_title`, `status`, `job_url`, `location`, and `salary_text` in a single round trip.
-5. `match_existing_application` normalizes company name and job title (case, whitespace, legal suffixes, gender qualifiers) and looks for an existing `Application` row with the same company/title/platform - an exact company+title hit resolves immediately (`update_existing`); no company match at all is `new_application`; a company match (exact or fuzzy) with no exact title match is the ambiguous case.
-6. For the ambiguous case, `disambiguate_match` (`research/disambiguate.py`) runs an LLM tool-calling loop over the candidate application(s): it can pull each candidate's status history, read the source email it came from, or check the company's real-world identity via web search, before submitting a `same_application`/`different_application`/`duplicate` verdict - a merge verdict is rejected if the agent never actually looked at that specific candidate first. Any agent error, or a missing `gmail_client`/`search_client` dependency, falls open to `new_application`.
-7. `upsert_db` writes the `Application` row (if new) or a new `StatusEvent` (if updating), always finishing by calling `mark_processed` so the email is never re-ingested.
-8. The FastAPI layer (`web/api.py`) exposes the result as `/api/dashboard`, `/api/applications/{id}`, `/api/reminders`, etc.; the React dashboard (`frontend/`) renders the status board, timeline, and reminders from those endpoints, and can trigger corrections (drag-and-drop status change, inline edit, reprocess-from-source-email) that write back through the same API.
+1. `run_sync` (`pipeline/graph.py`) builds a Gmail query from `sources.yaml`'s keywords (bounded by the last run's date plus a lookback buffer) and calls `GmailClient.fetch_messages` to pull the raw batch concurrently.
+2. `process_emails` drops anything already in the `processed_emails` table (idempotency guard), then streams each remaining email through the compiled LangGraph.
+3. `scrutinize_relevance` (`pipeline/nodes.py`) runs a heuristic first, escalating to one cheap `RelevanceOnlyResult` LLM call only when ambiguous; a reject short-circuits to `mark_scrutiny_rejected`.
+4. `classify_and_extract` makes one structured-output call (`ClassifyAndExtractResult`) that classifies relevance and extracts `company_name`, `job_title`, `status`, `job_url`, `location`, and `salary_text` in a single round trip.
+5. `match_existing_application` normalizes company/title and looks for an existing `Application` with the same company/title/platform: exact hit resolves immediately, no company match is `new_application`, a company match with no exact title match is the ambiguous case.
+6. For the ambiguous case, `disambiguate_match` (`research/disambiguate.py`) runs an LLM tool-calling loop over the candidates and submits a verdict, failing open to `new_application` on any error or missing dependency.
+7. `upsert_db` writes a new `Application` or a new `StatusEvent`, always finishing with `mark_processed`.
+8. The FastAPI layer (`web/api.py`) exposes the result at `/api/dashboard`, `/api/applications/{id}`, `/api/reminders`, etc.; the React dashboard renders those and writes corrections back through the same API.
 
 ## Setup
 
@@ -300,74 +254,18 @@ Both `applysync sync` and a dashboard-triggered sync fetch new application-relat
 
 ## LLMOps
 
-A prompt or model change is a production deploy: the output is probabilistic, correctness is a percentage rather than a boolean, and the model is a third-party dependency that can drift under you. This project treats that seriously, but stays zero-vendor and zero-egress: everything runs self-hosted, and no email content, database, or gold dataset ever leaves the machine.
-
-Because the gold eval dataset holds real email bodies (PII, gitignored) and the eval hits the live rate-limited model, the checks split across **two planes**:
+A prompt or model change is a production deploy: output is probabilistic, correctness is a percentage rather than a boolean, and the model can drift under you. This project treats that seriously while staying zero-vendor and zero-egress: everything runs self-hosted, and no email content, database, or gold dataset ever leaves the machine. Because the gold eval dataset holds real email bodies (PII, gitignored) and hits the live rate-limited model, the checks split across **two planes** so only the pass/fail decision leaves the machine:
 
 | Check | Runs where | Touches PII / live model? | How to run |
 | --- | --- | --- | --- |
 | Unit tests, lint, frontend build + Playwright E2E | GitHub Actions (cloud) | No (LLM mocked, `/api/*` mocked) | automatic on every PR (`.github/workflows/ci.yml`) |
 | Prompt/schema-drift guard (locks the classifier's status space) | GitHub Actions (cloud) | No | `pytest tests/test_schema_drift.py` |
 | Eval gate (per-stage accuracy vs thresholds) | Local | Yes | `python eval/run_eval.py --strict` |
-| Pre-push enforcement of the eval gate | Local git hook | Yes | `sh scripts/install-hooks.sh` (once), then blocks any push that changes prompts/model/schema and regresses; bypass with `git push --no-verify` |
+| Pre-push enforcement of the eval gate | Local git hook | Yes | `sh scripts/install-hooks.sh` (once), then blocks a regressing push; bypass with `git push --no-verify` |
 | Quality-over-time ledger | Local, committed | No (aggregate numbers only) | `python eval/run_eval.py --strict --ledger` appends to `eval/baseline.json` |
 | Production feedback loop (score traces, pull failures into gold) | Local + self-hosted Langfuse | Yes | `backend/scripts/run_llm_judge_backfill.py`, `backend/scripts/pull_flagged_traces.py` |
 
-The eval gate never runs in cloud CI (no PII data there, and it would call the rate-limited model); only the pass/fail decision leaves the machine. `eval/baseline.json` is the one eval artifact allowed on the public repo, and it is aggregate-only: dates, git SHA, model name, and accuracy percentages, never a message ID, email body, or company name.
-
-### What this project exercises, as an AI-engineering scorecard
-
-A competency scorecard - what this project exercises as an AI-engineering discipline, rated Learned / Partial / Not touched with the concrete evidence in this repo - lives in [`docs/llmops-scorecard.md`](docs/llmops-scorecard.md).
-
-## Local Model Experiment (8GB VRAM)
-
-The pipeline runs on a hosted model (`nvidia/nemotron-3-nano-30b-a3b`) by
-default. As an experiment, the LLM client was pointed at a **local
-[Ollama](https://ollama.com/) instance** (its OpenAI-compatible endpoint) to see
-whether extraction could run fully offline, with no API key and no rate limit,
-on consumer hardware: an **8GB VRAM AMD Radeon** card. Reproducing it takes a
-small change kept on an experimental branch (not shipped to `main`): point the
-client at the local endpoint via `NVIDIA_BASE_URL`, and for local runs drop the
-NVIDIA-specific 40 RPM rate limiter and disable the model's reasoning step,
-since a local model has neither the per-account cap nor a use for
-chain-of-thought here.
-
-Each model was run through the **real `classify_and_extract` node** (identical
-prompt and strict `json_schema` structured output) on a representative
-confirmation email. Latency is the warm per-call time (model already loaded);
-"correct" means it produced the expected `company_name` / `job_title` / `status`
-on that sample - an indicative smoke test, not the full gold-eval accuracy.
-
-| Model | Params | ~VRAM (Q4) | Warm latency / call | Correct? |
-| --- | --- | --- | --- | --- |
-| `nvidia/nemotron-3-nano-30b-a3b` (hosted, reference) | 30B MoE (3B active) | n/a (hosted) | **~0.8s** | yes |
-| `mistral:7b` | 7B | 4.4 GB | **18.8s** | yes |
-| `qwen2.5:3b` | 3B | ~2 GB | 22.8s | yes |
-| `gemma3:1b` | 1B | 0.8 GB | 24.0s | **no** (fails the schema) |
-| `gemma2:2b` | 2B | 1.6 GB | 26.6s | yes |
-| `qwen2.5:7b-instruct` | 7B | 4.5 GB | 35s | yes |
-| `qwen3:4b` (reasoning) | 4B | 3.2 GB | never returns | **no** (spends its whole budget "thinking") |
-
-Findings:
-
-- **Local works, but it is 20-40x slower than the hosted model**, not faster.
-  The bottleneck is the strict `json_schema` grammar-constrained decode on
-  consumer-GPU inference, not VRAM - so its real value is offline / keyless /
-  no-rate-limit testing, not speed.
-- **Smaller is not reliably faster or better.** The fastest correct model was a
-  7B (`mistral:7b`), the smallest model (`gemma3:1b`) failed the schema
-  entirely, and a 2B was slower than a 7B. Latency is dominated by the grammar
-  decode and prompt processing, so parameter count barely tracks with it.
-- **Reasoning models are unusable here.** `qwen3:4b` spends its entire token
-  budget on hidden reasoning and never emits the JSON; Ollama's OpenAI endpoint
-  does not reliably honor a "disable thinking" flag. Use a plain instruct model.
-- **The hosted "nano" cannot be run on an 8GB card.** Despite the name it is a
-  30B Mixture-of-Experts model; all 30B parameters must be resident (~18-20GB at
-  4-bit), and its ~0.8s speed comes from datacenter GPUs, not from being small.
-
-Bottom line: NVIDIA's hosted model stays the default. Local is a viable
-offline/no-key fallback for testing at ~19s/call (`mistral:7b`) if that
-tradeoff is worth it.
+`eval/baseline.json` is the one eval artifact allowed on the public repo, and it is aggregate-only (dates, git SHA, model name, accuracy percentages), never a message ID, email body, or company name. A competency scorecard rating what this project exercises as an AI-engineering discipline, with the concrete in-repo evidence, lives in [`docs/llmops-scorecard.md`](docs/llmops-scorecard.md).
 
 ## Roadmap
 
@@ -389,7 +287,7 @@ tradeoff is worth it.
 - [x] Real-time pipeline flow visualization: a live graph on the Sync page mirroring the actual LangGraph structure, animated node-by-node via SSE as a real sync runs; a Stop button for cancelling an in-progress sync
 - [ ] Confidence-routed merges: agent verdicts below a confidence bar become review suggestions instead of applying silently
 
-Full milestone detail, including the reasoning behind each decision, lives in `CLAUDE.md`.
+Full milestone detail, including the reasoning behind each decision, lives in `CLAUDE.md`. One-off experiments that never shipped (e.g. running the pipeline on a local 8GB-VRAM Ollama model) are written up in [`docs/experiments/`](docs/experiments/).
 
 ## Contributing
 
